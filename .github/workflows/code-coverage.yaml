@@ -14,8 +14,23 @@ jobs:
       - name: test
         run: gradle test
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}          
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}      
+          
       - name: jacoco
         run: gradle test jacocoTestReport
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Upload artifact"
+        uses: actions/upload-artifact@3cea5372237819ed00197afe530f5a7ea3e805c8 # v3.1.0
+        with:
+          name: Test Result
+          path: ./build/reports/tests/test/index.html
+          retention-days: 5
+          
+      - name: "Upload artifact2"
+        uses: actions/upload-artifact@3cea5372237819ed00197afe530f5a7ea3e805c8 # v3.1.0
+        with:
+          name: jacoco Result
+          path: ./build/reports/jacoco/test/html/index.html
+          retention-days: 5          
