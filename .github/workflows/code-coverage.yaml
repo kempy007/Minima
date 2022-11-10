@@ -33,4 +33,11 @@ jobs:
         with:
           name: jacoco Result
           path: ./build/reports/jacoco/test/html/index.html
-          retention-days: 5          
+          retention-days: 5    
+          
+      - name: "Upload artifact3"
+        uses: actions/upload-artifact@3cea5372237819ed00197afe530f5a7ea3e805c8 # v3.1.0
+        with:
+          name: jacoco csv Result
+          path: ./build/reports/jacoco/test/jacocoTestReport.csv
+          retention-days: 5  
