@@ -1,6 +1,7 @@
 package org.minima.system.commands.txn;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.minima.database.MinimaDB;
 import org.minima.database.userprefs.txndb.TxnDB;
@@ -20,6 +21,37 @@ public class txnpost extends Command {
 
 	public txnpost() {
 		super("txnpost","[id:] (auto:true) (burn:) - Post a transaction. Automatically set the Scripts and MMR");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxnpost\n"
+				+ "\n"
+				+ "Post a transaction. Automatically set the Scripts and MMR proofs.\n"
+				+ "\n"
+				+ "Optionally set a burn for the transaction.\n"
+				+ "\n"
+				+ "id:\n"
+				+ "    The id of the transaction.\n"
+				+ "\n"
+				+ "auto: (optional)\n"
+				+ "    Set the scripts and MMR proofs for the transaction.\n"
+				+ "\n"
+				+ "burn: (optional)\n"
+				+ "    Amount in Minima to burn with the transaction.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txnpost id:simpletxn\n"
+				+ "\n"
+				+ "txnpost id:simpletxn auto:true burn:0.1\n"
+				+ "\n"
+				+ "txnpost id:multisig burn:0.1\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"id","auto","burn"}));
 	}
 	
 	@Override

@@ -1,5 +1,8 @@
 package org.minima.system.commands.txn;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import org.minima.database.MinimaDB;
 import org.minima.database.userprefs.txndb.TxnDB;
 import org.minima.database.userprefs.txndb.TxnRow;
@@ -11,6 +14,25 @@ public class txnclear extends Command {
 
 	public txnclear() {
 		super("txnclear","[id:] - Clear ALL the Witness data");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxnclear\n"
+				+ "\n"
+				+ "Clear ALL the Witness data - signatures, mmr proofs and script proofs.\n"
+				+ "\n"
+				+ "id:\n"
+				+ "    The id of the transaction to clear.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txnclear id:multisig\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"id"}));
 	}
 	
 	@Override

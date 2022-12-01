@@ -1,6 +1,7 @@
 package org.minima.system.commands.txn;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.minima.database.MinimaDB;
 import org.minima.database.userprefs.txndb.TxnDB;
@@ -22,6 +23,32 @@ public class txnsign extends Command {
 
 	public txnsign() {
 		super("txnsign","[id:] [publickey:0x..|auto] - Sign a transaction");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxnsign\n"
+				+ "\n"
+				+ "Sign a transaction.\n"
+				+ "\n"
+				+ "Specify the public key or use 'auto' if the coin inputs are simple.\n"
+				+ "\n"
+				+ "id:\n"
+				+ "    The id of the transaction to sign.\n"
+				+ "\n"
+				+ "publickey:\n"
+				+ "    The public key specified in a custom script, or 'auto' for transactions with simple inputs.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txnsign id:simpletxn publickey:auto\n"
+				+ "\n"
+				+ "txnsign id:multisig publickey:0xFD8B..\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"id","publickey"}));
 	}
 	
 	@Override

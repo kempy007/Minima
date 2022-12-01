@@ -1,6 +1,7 @@
 package org.minima.system.commands.network;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.minima.system.Main;
 import org.minima.system.commands.Command;
@@ -13,6 +14,30 @@ public class network extends Command {
 
 	public network() {
 		super("network","(action:list|reset) - Show network status or reset traffic counter");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\nnetwork\n"
+				+ "\n"
+				+ "Show network status or reset traffic counter.\n"
+				+ "\n"
+				+ "action: (optional)\n"
+				+ "    list : List the direct peers you are connected to. The default.\n"
+				+ "    reset : Restart the traffic counter from 0.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "network\n"
+				+ "\n"
+				+ "network action:list\n"
+				+ "\n"
+				+ "network action:reset\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"action"}));
 	}
 	
 	@Override

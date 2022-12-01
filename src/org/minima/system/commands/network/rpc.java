@@ -1,5 +1,8 @@
 package org.minima.system.commands.network;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import org.minima.database.MinimaDB;
 import org.minima.system.Main;
 import org.minima.system.commands.Command;
@@ -10,6 +13,29 @@ public class rpc extends Command {
 
 	public rpc() {
 		super("rpc","[enable:true|false] - Enable and disable RPC on port "+GeneralParams.RPC_PORT+" (default is off)");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\nrpc\n"
+				+ "\n"
+				+ "Enable and disable RPC on port "+GeneralParams.RPC_PORT+" (default is off).\n"
+				+ "\n"
+				+ "Ensure your RPC port is secured behind a firewall before enabling.\n"
+				+ "\n"
+				+ "enable:\n"
+				+ "    true or false, true to enable rpc or false to disable.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "rpc enable:true\n"
+				+ "\n"
+				+ "rpc enable:false\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"enable"}));
 	}
 	
 	@Override

@@ -1,5 +1,8 @@
 package org.minima.system.commands.network;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import org.minima.system.Main;
 import org.minima.system.commands.Command;
 import org.minima.system.network.minima.NIOManager;
@@ -10,6 +13,29 @@ public class connect extends Command {
 
 	public connect() {
 		super("connect","[host:ip:port] - Connect to a network Minima instance");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\nconnect\n"
+				+ "\n"
+				+ "Connect to a network Minima instance.\n"
+				+ "\n"
+				+ "Connect to another node to join the main network or to create a private test network.\n"
+				+ "\n"
+				+ "Set your own host using the -host parameter at start up.\n"
+				+ "\n"
+				+ "host:\n"
+				+ "    The external ip:port of the node to connect to.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "connect host:94.0.239.117:9001\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"host"}));
 	}
 	
 	@Override

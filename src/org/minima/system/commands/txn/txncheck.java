@@ -1,6 +1,7 @@
 package org.minima.system.commands.txn;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.minima.database.MinimaDB;
 import org.minima.database.txpowtree.TxPoWTreeNode;
@@ -24,6 +25,27 @@ public class txncheck extends Command {
 
 	public txncheck() {
 		super("txncheck","[id:] - Show details about the transaction");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxncheck\n"
+				+ "\n"
+				+ "Show details about the transaction.\n"
+				+ "\n"
+				+ "Verify whether the inputs, outputs, signatures, proofs and scripts are valid.\n"
+				+ "\n"
+				+ "id: (optional)\n"
+				+ "    The id of the transaction to check.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txncheck id:multisig\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"id"}));
 	}
 	
 	@Override

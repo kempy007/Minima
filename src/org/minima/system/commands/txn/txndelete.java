@@ -1,5 +1,8 @@
 package org.minima.system.commands.txn;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import org.minima.database.MinimaDB;
 import org.minima.database.userprefs.txndb.TxnDB;
 import org.minima.system.commands.Command;
@@ -9,6 +12,25 @@ public class txndelete extends Command {
 
 	public txndelete() {
 		super("txndelete","[id:] - Delete this custom transaction");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxndelete\n"
+				+ "\n"
+				+ "Delete a previously created custom transaction.\n"
+				+ "\n"
+				+ "id:\n"
+				+ "    The id of the transaction to delete.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txndelete id:multisig\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"id"}));
 	}
 	
 	@Override

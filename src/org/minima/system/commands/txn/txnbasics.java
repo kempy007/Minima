@@ -1,5 +1,8 @@
 package org.minima.system.commands.txn;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import org.minima.database.MinimaDB;
 import org.minima.database.userprefs.txndb.TxnDB;
 import org.minima.database.userprefs.txndb.TxnRow;
@@ -14,6 +17,27 @@ public class txnbasics extends Command {
 
 	public txnbasics() {
 		super("txnbasics","[id:] - Automatically set the MMR proofs and scripts for a txn");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxnbasics\n"
+				+ "\n"
+				+ "Automatically set the MMR proofs and scripts for a transaction.\n"
+				+ "\n"
+				+ "Only run this when a transaction is ready to be posted.\n"
+				+ "\n"
+				+ "id:\n"
+				+ "    The id of the transaction.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txnbasics id:simpletxn\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"id"}));
 	}
 	
 	@Override

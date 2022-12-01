@@ -155,7 +155,14 @@ public class MDSManager extends MessageProcessor {
 		return mMiniHUBPassword;
 	}
 	
-	public boolean checkMiniHUBPasword(String zPassword) {
+	/**
+	 * One check at a time
+	 * @throws InterruptedException 
+	 */
+	public synchronized boolean checkMiniHUBPasword(String zPassword) throws InterruptedException {
+		//PAUSE - this prevents fast checking of passwords
+		Thread.sleep(1000);
+		
 		if(GeneralParams.MDS_PASSWORD.equals("")) {
 			return mMiniHUBPassword.replace("-", "").equalsIgnoreCase(zPassword.replace("-", "").trim());
 		}
@@ -488,7 +495,7 @@ public class MDSManager extends MessageProcessor {
 				byte[] serv = MiniFile.readCompleteFile(service);
 				String code = new String(serv,MiniString.MINIMA_CHARSET);
 				
-				//Load it into the servcei runner..
+				//Load it into the service runner..
 				Context ctx = Context.enter();
 				ctx.setOptimizationLevel(-1);
 				ctx.setLanguageVersion(Context.VERSION_1_8);

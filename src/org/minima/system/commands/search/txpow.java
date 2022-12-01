@@ -1,8 +1,10 @@
 package org.minima.system.commands.search;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 
 import org.minima.database.MinimaDB;
+import org.minima.database.txpowtree.TxPoWTreeNode;
 import org.minima.objects.TxPoW;
 import org.minima.objects.base.MiniData;
 import org.minima.objects.base.MiniNumber;
@@ -15,7 +17,38 @@ import org.minima.utils.json.JSONObject;
 public class txpow extends Command {
 
 	public txpow() {
-		super("txpow","(txpowid:txpowid) (block:) (address:) - Search for a specific TxPoW");
+		super("txpow","(txpowid:txpowid) (onchain:) (block:) (address:) - Search for a specific TxPoW or check for onchain");
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\ntxpow\n"
+				+ "\n"
+				+ "Search for a specific TxPoW in the unpruned chain or your mempool.\n"
+				+ "\n"
+				+ "Search by txpowid, block or 0x / Mx address.\n"
+				+ "\n"
+				+ "txpowid: (optional)\n"
+				+ "    txpowid of the TxPoW to search for.\n"
+				+ "\n"
+				+ "block: (optional)\n"
+				+ "    Block number to search in. Must be in the unpruned chain.\n"
+				+ "\n"
+				+ "address: (optional)\n"
+				+ "    0x or Mx address. Search for TxPoWs containing this specific address.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "txpow txpowid:0x000..\n"
+				+ "\n"
+				+ "txpow block:200\n"
+				+ "\n"
+				+ "txpow address:0xCEF6..\n";
+	}
+	
+	@Override
+	public ArrayList<String> getValidParams(){
+		return new ArrayList<>(Arrays.asList(new String[]{"txpowid","block","address","onchain"}));
 	}
 	
 	@Override
@@ -24,7 +57,7 @@ public class txpow extends Command {
 		
 		//Get the txpowid
 		if(existsParam("txpowid")) {
-			String txpowid = getParam("txpowid", "0x01");
+			String txpowid = getParam("txpowid");
 			
 			//Search for a given txpow
 			TxPoW txpow = MinimaDB.getDB().getTxPoWDB().getTxPoW(txpowid);
@@ -34,6 +67,29 @@ public class txpow extends Command {
 		
 			ret.put("response", txpow.toJSON());
 			
+		}else if(existsParam("onchain")) {
+			MiniData txpowid = getDataParam("onchain");
+		
+			JSONObject resp = new JSONObject();
+			
+			TxPoW block = TxPoWSearcher.searchChainForTxPoW(txpowid);
+			if(block == null) {
+				resp.put("found", false);
+			}else {
+				
+				TxPoWTreeNode tip = MinimaDB.getDB().getTxPoWTree().getTip();
+				
+				resp.put("found", true);
+				resp.put("block", block.getBlockNumber().toString());
+				resp.put("blockid", block.getTxPoWID());
+				resp.put("tip", tip.getBlockNumber().toString());
+				
+				MiniNumber depth  = tip.getBlockNumber().sub(block.getBlockNumber());
+				resp.put("confirmations", depth.toString());
+			}
+			
+			ret.put("response", resp);
+		
 		}else if(existsParam("block")) {
 			
 			MiniNumber block = getNumberParam("block");

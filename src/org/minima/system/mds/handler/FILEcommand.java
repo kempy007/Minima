@@ -6,11 +6,8 @@ import org.minima.objects.base.MiniString;
 import org.minima.system.mds.MDSManager;
 import org.minima.utils.MiniFile;
 import org.minima.utils.MinimaLogger;
-import org.minima.utils.RPCClient;
 import org.minima.utils.json.JSONArray;
 import org.minima.utils.json.JSONObject;
-
-import com.sun.media.sound.FFT;
 
 public class FILEcommand {
 
@@ -131,7 +128,7 @@ public class FILEcommand {
 			result = stattrue.toJSONString();
 			
 		}catch(Exception exc) {
-			MinimaLogger.log("ERROR FILE command : "+mMiniDAPPID+" "+exc);
+			MinimaLogger.log("FILE command : "+mMiniDAPPID+" "+exc);
 			
 			statfalse.put("error", exc.toString());
 			result = statfalse.toJSONString();
