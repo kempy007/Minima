@@ -22,24 +22,6 @@ public class StateVariable implements Streamable {
 	public static final MiniByte STATETYPE_BOOL 	= new MiniByte(8);
 	
 	/**
-	 * Create a particular State Variable
-	 */
-	public static StateVariable createStringStateVariable(int zPort, String zString, boolean zKeeper) {
-		//Check within range
-		if(zPort<0 || zPort>255) {
-			throw new IllegalArgumentException("State Variable port MUST be 0-255");
-		}
-		
-		//Create an empty vessel
-		StateVariable sv 	= new StateVariable();
-		sv.mPort 			= new MiniByte(zPort);
-		sv.mType 			= STATETYPE_STRING;
-		sv.mData 			= new MiniString(zString);
-		
-		return sv;
-	}
-	
-	/**
 	 * What type is this
 	 */
 	MiniByte mType;
@@ -60,9 +42,15 @@ public class StateVariable implements Streamable {
 	private StateVariable() {}
 	
 	public StateVariable(int zPort, String zData) {
+		
 		//Check within range
 		if(zPort<0 || zPort>255) {
 			throw new IllegalArgumentException("State Variable port MUST be 0-255");
+		}
+		
+		//Check not blank
+		if(zData.trim().equals("")) {
+			throw new IllegalArgumentException("State Variable cannot be blank");
 		}
 		
 		//Store as MiniNumber
@@ -70,6 +58,7 @@ public class StateVariable implements Streamable {
 		
 		//Set the Data
 		if(zData.toLowerCase().startsWith("mx")) {
+			//KISSVN ONLY understands 0x not Mx
 			mData = new MiniString(Address.convertMinimaAddress(zData).to0xString());
 			mType = STATETYPE_HEX;
 		
@@ -170,6 +159,8 @@ public class StateVariable implements Streamable {
 		}else if(mType.isEqual(STATETYPE_STRING)) {
 			mData = MiniString.ReadFromStream(zIn);
 		
+		}else{
+			throw new IOException("Invalid StateVariable type : "+mType);
 		}
 	}
 	

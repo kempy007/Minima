@@ -1,6 +1,7 @@
 package org.minima.system.mds.handler;
 
 import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
@@ -102,6 +103,8 @@ public class MDSCompleteHandler implements Runnable {
 			
 			//And finally URL decode..
 			fileRequested = URLDecoder.decode(fileRequested,"UTF-8").trim();
+			
+			//MinimaLogger.log(fileRequested,false);
 			
 			//Get the command / params only
 			int index 		= fileRequested.indexOf("?");
@@ -211,6 +214,31 @@ public class MDSCompleteHandler implements Runnable {
 					NETcommand net 	= new NETcommand(minidappid,url, postdata);
 					result 			= net.runCommand();
 				
+				}else if(command.equals("keypair")) {
+					
+					//Get the URL and the post data..
+					int dataindex 	= data.indexOf("&");
+					String action 	= data.substring(0, dataindex);
+					String keydata 	= data.substring(dataindex+1);
+					
+					//Is it set or get
+					KEYPAIRcommand kp = null;
+					if(action.equals("get")) {
+					
+						kp = new KEYPAIRcommand(mMDS, minidappid, KEYPAIRcommand.KEYPAIR_GET,keydata,"");
+					}else {
+						
+						//It's a set
+						dataindex 		= keydata.indexOf("&");
+						String key 		= keydata.substring(0, dataindex);
+						String value 	= keydata.substring(dataindex+1);
+						
+						kp = new KEYPAIRcommand(mMDS, minidappid, KEYPAIRcommand.KEYPAIR_SET,key,value);
+					}
+					
+					//Run it
+					result = kp.runCommand();
+				
 				}else if(command.equals("file")) {
 					
 					//Get the URL and the post data..
@@ -221,26 +249,77 @@ public class MDSCompleteHandler implements Runnable {
 					//What was the data
 					FILEcommand fc = null;
 					if(action.equals("list")) {
-						fc = new FILEcommand(mMDS, minidappid, FILEcommand.FILECOMMAND_LIST, 
-								filedata, "");
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_LIST, filedata, "");
 					
 					}else if(action.equals("save")) {
 						dataindex 			= filedata.indexOf("&");
 						String file 		= filedata.substring(0, dataindex);
 						String actualedata 	= filedata.substring(dataindex+1);
-						fc = new FILEcommand(mMDS, minidappid, FILEcommand.FILECOMMAND_SAVE, 
-								file, actualedata);
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_SAVE, file, actualedata);
+					
+					}else if(action.equals("savebinary")) {
+						dataindex 			= filedata.indexOf("&");
+						String file 		= filedata.substring(0, dataindex);
+						String actualedata 	= filedata.substring(dataindex+1);
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_SAVEBINARY, file, actualedata);
 					
 					}else if(action.equals("load")) {
-						fc = new FILEcommand(mMDS, minidappid, FILEcommand.FILECOMMAND_LOAD, 
-								filedata, "");
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_LOAD, filedata, "");
+					
+					}else if(action.equals("loadbinary")) {
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_LOADBINARY, filedata, "");
 					
 					}else if(action.equals("delete")) {
-						fc = new FILEcommand(mMDS, minidappid, FILEcommand.FILECOMMAND_DELETE, 
-								filedata, "");
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_DELETE, filedata, "");
+					
+					}else if(action.equals("getpath")) {
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_GETPATH, filedata, "");
+					
+					}else if(action.equals("makedir")) {
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_MAKEDIR, filedata, "");
+					
+					}else if(action.equals("copy")) {
+						dataindex 			= filedata.indexOf("&");
+						String file 		= filedata.substring(0, dataindex);
+						String copyfile 	= filedata.substring(dataindex+1);
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_COPY, file, copyfile);
+					
+					}else if(action.equals("move")) {
+						dataindex 			= filedata.indexOf("&");
+						String file 		= filedata.substring(0, dataindex);
+						String movefile 	= filedata.substring(dataindex+1);
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_MOVE, file, movefile);
+					
+					}else if(action.equals("download")) {
+						
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_DOWNLOAD, filedata, "");
+						
+					}else if(action.equals("copytoweb")) {
+						
+						dataindex 			= filedata.indexOf("&");
+						String file 		= filedata.substring(0, dataindex);
+						String movefile 	= filedata.substring(dataindex+1);
+						
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_COPYTOWEB, file, movefile);
+						
+					}else if(action.equals("deletefromweb")) {
+						fc = new FILEcommand(mMDS, minidappid, 
+								FILEcommand.FILECOMMAND_DELETEFROMWEB, filedata, "");
 					
 					}else {
-						throw new IllegalArgumentException("Invalid function");
+						throw new IllegalArgumentException("Invalid function : "+action);
 					}
 					
 					//Create a Command and run it..
@@ -264,6 +343,59 @@ public class MDSCompleteHandler implements Runnable {
 						COMMSCommand comms = new COMMSCommand(mMDS, minidappid, md.getName(), msg);
 						result = comms.runCommand();
 					}
+				
+				}else if(command.equals("dapplink")) {
+					
+					//Get the MiniDapp in question..
+					MiniDAPP reqmini = mMDS.getMiniDAPPFromName(data.trim());
+					if(reqmini == null) {
+						//No MiniDAPP found..
+						JSONObject error = new JSONObject();
+						error.put("status", false);
+						error.put("error", "MiniDAPP with that name not found");
+						result = error.toString();
+					}else {
+						
+						//Are permission levels intact
+						boolean allow = false;
+						
+						//Check the Permissions..
+						if(reqmini.getPermission().equalsIgnoreCase("read")) {
+							allow = true;
+						}else {
+							
+							//Check OUR permission..
+							MiniDAPP md = mMDS.getMiniDAPP(minidappid);
+							if(md.getPermission().equalsIgnoreCase("write")) {
+								allow = true;
+							}
+						}
+						
+						//Ok to send link.. ?
+						if(allow) {
+							
+							//Get the sessionid..
+							String sessionid = mMDS.convertMiniDAPPID(reqmini.getUID());
+							
+							//And return the data
+							JSONObject linkresult = new JSONObject();
+							linkresult.put("status", true);
+							
+							JSONObject resp = new JSONObject();
+							resp.put("uid", reqmini.getUID());
+							resp.put("sessionid", sessionid);
+							
+							linkresult.put("response", resp);
+							result = linkresult.toString();
+							
+						}else {
+							//No MiniDAPP found..
+							JSONObject error = new JSONObject();
+							error.put("status", false);
+							error.put("error", "MiniDAPP permission escalation");
+							result = error.toString();
+						}
+					}
 					
 				}else if(command.equals("poll")) {
 					
@@ -273,7 +405,7 @@ public class MDSCompleteHandler implements Runnable {
 				}else{
 					
 					//Is it a CMD / SQL / FILE / FUNC ..
-					MinimaLogger.log("ERROR COMPLETE FILE REQ : "+command+" "+params);
+					MinimaLogger.log("ERROR MDS COMPLETE HANDLER REQ : "+command+" "+params);
 					
 					//Invalid command
 					JSONObject error = new JSONObject();
@@ -287,7 +419,7 @@ public class MDSCompleteHandler implements Runnable {
 				
 				// send HTTP Headers
 				out.println("HTTP/1.1 200 OK");
-				out.println("Server: HTTP SQL Server from Minima : 1.3");
+				out.println("Server: HTTP SQL Server from Minima 1.3");
 				out.println("Date: " + new Date());
 				out.println("Content-type: text/plain");
 				out.println("Content-length: " + finallength);
@@ -297,44 +429,19 @@ public class MDSCompleteHandler implements Runnable {
 				out.flush(); // flush character output stream buffer
 			}
 			
+		}catch(IllegalArgumentException ioe) {
+			MinimaLogger.log("MDSCompleteHandler : "+ioe.toString());
+			outputError(out);
+			
 		}catch(SSLHandshakeException exc) {
 		}catch(SSLException exc) {
-		
 		}catch(SocketException exc) {
-			
-			// send HTTP Headers
-			out.println("HTTP/1.1 500 OK");
-			out.println("Server: HTTP MDS Server from Minima : 1.3");
-			out.println("Date: " + new Date());
-			out.println("Content-type: text/plain");
-			out.println("Access-Control-Allow-Origin: *");
-			out.println(); // blank line between headers and content, very important !
-			out.flush(); // flush character output stream buffer
-		
-		}catch(IllegalArgumentException exc) {
-			MinimaLogger.log(exc.toString());
-			
-			// send HTTP Headers
-			out.println("HTTP/1.1 500 OK");
-			out.println("Server: HTTP MDS Server from Minima : 1.3");
-			out.println("Date: " + new Date());
-			out.println("Content-type: text/plain");
-			out.println("Access-Control-Allow-Origin: *");
-			out.println(); // blank line between headers and content, very important !
-			out.flush(); // flush character output stream buffer
-			
+		}catch(IOException exc) {	
 		}catch(Exception ioe) {
-			MinimaLogger.log(ioe);
 			
-			// send HTTP Headers
-			out.println("HTTP/1.1 500 OK");
-			out.println("Server: HTTP MDS Server from Minima : 1.3");
-			out.println("Date: " + new Date());
-			out.println("Content-type: text/plain");
-			out.println("Access-Control-Allow-Origin: *");
-			out.println(); // blank line between headers and content, very important !
-			out.flush(); // flush character output stream buffer
-			
+			//Any other exception we can output
+//			MinimaLogger.log("MDSCompleteHandler : "+ioe.toString());
+//			outputError(out);
 			
 		} finally {
 			try {
@@ -345,5 +452,16 @@ public class MDSCompleteHandler implements Runnable {
 //				MinimaLogger.log(e);
 			} 	
 		}	
+	}
+	
+	private static void outputError(PrintWriter zOut) {
+		// send HTTP Headers
+		zOut.println("HTTP/1.1 500 Internal Server Error");
+		zOut.println("Server: HTTP MDS Server from Minima 1.3");
+		zOut.println("Date: " + new Date());
+		zOut.println("Content-type: text/plain");
+		zOut.println("Access-Control-Allow-Origin: *");
+		zOut.println(); // blank line between headers and content, very important !
+		zOut.flush(); // flush character output stream buffer
 	}
 }

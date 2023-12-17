@@ -128,10 +128,16 @@ public class MaximaManager extends MessageProcessor {
 	MiniData mMLSPublic;
 	MiniData mMLSPrivate;
 	String mMaximaMLSAddress;
-	boolean mHaveContacts = false;
 	
+	/**
+	 * Permanent Maxima address Users..
+	 */
+	public ArrayList<String> mPermanentMaxima = new ArrayList<>();
+	
+	/**
+	 * Are we Inited
+	 */
 	private boolean mInited 	= false;
-	public boolean mMaximaLogs 	= false;
 
 	/**
 	 * Are you a static Maxima ID
@@ -179,6 +185,20 @@ public class MaximaManager extends MessageProcessor {
 		return mInited;
 	}
 	
+	public MaxMsgHandler getMaxSender() {
+		return mMaxSender;
+	}
+	
+	/**
+	 * Sometime the message stack can grow too much
+	 */
+	public void checkPollMessages() {
+		if(getMaxSender().getSize()>256) {
+			MinimaLogger.log("Maxima POLL stack > 256.. clearing.. ");
+			getMaxSender().clear();
+		}
+	}
+	
 	public String getMaximaIdentity() {
 		return mMaximaAddress;
 	}
@@ -199,8 +219,25 @@ public class MaximaManager extends MessageProcessor {
 		return mMaxContacts;
 	}
 	
-	public String getLocalMaximaAddress() {
-		return getMaximaMLSIdentity()+"@"+GeneralParams.MINIMA_HOST+":"+GeneralParams.MINIMA_PORT;
+	public String getCurrentHostIP() {
+		if(GeneralParams.P2P_ENABLED && !GeneralParams.IS_HOST_SET) {
+			return ((P2PManager)(Main.getInstance().getNetworkManager().getP2PManager())).getP2PAddress();
+		}
+		
+		return GeneralParams.MINIMA_HOST+":"+GeneralParams.MINIMA_PORT;
+	}
+	
+	public String getLocalMaximaAddress(boolean zP2P) {
+		
+		///Regular host
+		String host = GeneralParams.MINIMA_HOST+":"+GeneralParams.MINIMA_PORT;
+		
+		//What the P2P thinks you are
+		if(zP2P && GeneralParams.P2P_ENABLED && !GeneralParams.IS_HOST_SET) {
+			host = ((P2PManager)(Main.getInstance().getNetworkManager().getP2PManager())).getP2PAddress();
+		}
+		
+		return getMaximaMLSIdentity()+"@"+host;
 	}
 	
 	public boolean isStaticMLS() {
@@ -218,6 +255,45 @@ public class MaximaManager extends MessageProcessor {
 		
 		//Save this..
 		MinimaDB.getDB().saveUserDB();
+		
+		if(zStatic) {
+			MinimaLogger.log("Enable STATIC MLS to host : "+zStaticAddress);
+		}else {
+			MinimaLogger.log("Disable STATIC MLS");
+		}
+	}
+	
+	private void savePermanentUDB() {
+		MinimaDB.getDB().getUserDB().setMaximaPermanent(mPermanentMaxima);
+		MinimaDB.getDB().saveUserDB();
+	}
+	
+	public ArrayList<String> getAllPermanent(){
+		return mPermanentMaxima;
+	}
+	
+	public void addPermanentMaxima(String zPublicKey) {
+		MinimaLogger.log("Permanent Maxima Publickey Added! : "+zPublicKey);
+		if(!mPermanentMaxima.contains(zPublicKey)) {
+			mPermanentMaxima.add(zPublicKey);
+			savePermanentUDB();
+		}
+	}
+	
+	public void removePermanentMaxima(String zPublicKey) {
+		if(mPermanentMaxima.contains(zPublicKey)) {
+			mPermanentMaxima.remove(zPublicKey);
+			savePermanentUDB();
+		}
+	}
+	
+	public void clearPermanentMaxima() {
+		mPermanentMaxima.clear();
+		savePermanentUDB();
+	}
+	
+	public MLSService getMLSService() {
+		return mMLSService;
 	}
 	
 	public String getMLSHost() {
@@ -274,7 +350,7 @@ public class MaximaManager extends MessageProcessor {
 		
 		//Are there any..
 		if(connctedhosts.size() == 0) {
-			return getLocalMaximaAddress();
+			return getLocalMaximaAddress(true);
 		}
 		
 		return connctedhosts.get(new Random().nextInt(connctedhosts.size())).getMaximaAddress();
@@ -307,6 +383,12 @@ public class MaximaManager extends MessageProcessor {
 			//Get the UserDB
 			UserDB udb = MinimaDB.getDB().getUserDB();
 			
+			//Get the Permanent List
+			mPermanentMaxima = udb.getMaximaPermanent();
+			
+			//Are we allowed contact requests
+			mMaxContacts.setAllowContact(udb.getMaximaAllowContacts());
+			
 			//Do we have an account already..
 			if(!udb.exists(MAXIMA_PUBKEY)) {
 				createMaximaKeys();
@@ -331,7 +413,6 @@ public class MaximaManager extends MessageProcessor {
 				mMaximaMLSAddress = Address.makeMinimaAddress(mMLSPublic);
 			}
 			
-			//Are we using a Static MLS
 			mIsStaticMLS 	= udb.getBoolean(MAXIMA_ISSTATICMLS, false);
 			mStaticMLS		= udb.getString(MAXIMA_STATICMLS, "");
 			if(mIsStaticMLS) {
@@ -346,6 +427,9 @@ public class MaximaManager extends MessageProcessor {
 			
 			//New Random UID for MLS GET Messages
 			MLS_RANDOM_UID = MiniData.getRandomData(32).to0xString();
+			
+			//Load the permanent address stuff if required
+//			udb.
 			
 			//We are inited
 			mInited = true;
@@ -398,7 +482,7 @@ public class MaximaManager extends MessageProcessor {
 					if(!mls.equals("")) {
 						
 						//Log it.. 
-						MinimaLogger.log("MLS check "+contact.getName()+" @ "+contact.getCurrentAddress()+" mls:"+mls);	
+						//MinimaLogger.log("MLS check "+contact.getName()+" @ "+contact.getCurrentAddress()+" mls:"+mls);	
 						
 						//Create a Get req
 						MLSPacketGETReq req = new MLSPacketGETReq(contact.getPublicKey(), MLS_RANDOM_UID);
@@ -469,7 +553,9 @@ public class MaximaManager extends MessageProcessor {
 				
 				//Do we have something..
 				if(mxhost == null) {
-					MinimaLogger.log("MAXIMA NEW connection : "+nioc.getFullAddress());
+					if(GeneralParams.MAXIMA_LOGS) {
+						MinimaLogger.log("MAXIMA NEW connection : "+nioc.getFullAddress());
+					}
 					
 					//Create a new Host
 					mxhost = new MaximaHost(nioc.getFullAddress());
@@ -478,7 +564,12 @@ public class MaximaManager extends MessageProcessor {
 					//Now insert this into the DB
 					maxdb.newHost(mxhost);
 				}else {
-					MinimaLogger.log("MAXIMA EXISTING connection : "+nioc.getFullAddress());
+					if(GeneralParams.MAXIMA_LOGS) {
+						MinimaLogger.log("MAXIMA EXISTING connection : "+nioc.getFullAddress());
+					}
+					
+					mxhost.updateLastSeen();
+					maxdb.updateHost(mxhost);
 				}
 				
 				//So we know the details.. Post them to him.. so he knows who we are..
@@ -531,6 +622,11 @@ public class MaximaManager extends MessageProcessor {
 			
 		}else if(zMessage.getMessageType().equals(MAXIMA_CHECK_CONNECTED)) {
 			
+			//Don't do this if in SLAVE mode
+			if(GeneralParams.TXBLOCK_NODE) {
+				return;
+			}
+			
 			//Check that IF this host is connected to us - it is a valid Maxima host
 			String uid = zMessage.getString("uid");
 			
@@ -540,14 +636,20 @@ public class MaximaManager extends MessageProcessor {
 			//Is it valid..
 			if(nioc != null) {
 				
+				MinimaLogger.log("MAXIMA HOST CONNECTED "+nioc.getUID()+" "+nioc.getFullAddress());
+				
 				//Ok - we should be connected..
 				MaximaHost mxhost = maxdb.loadHost(nioc.getFullAddress());
-				
-				//Are we connected..
-				MinimaLogger.log("MAXIMA Check if connected : "+nioc.getFullAddress()+" "+mxhost.getConnected());
+				if(mxhost == null) {
+					MinimaLogger.log("MaximaHost NOT Found on CHECK_CONNECTED "+nioc.getFullAddress()+" incoming:"+nioc.isIncoming());
+					return;
+				}
 				
 				//If not connected..
 				if(mxhost.getConnected() == 0) {
+				
+					//Are we connected..
+					MinimaLogger.log("MAXIMA Check if connected : "+nioc.getFullAddress()+" "+mxhost.getConnected());
 					
 					//How many valid hosts are we connected to.. if enough leave it..
 					int conns = getAllConnectedHosts().size();
@@ -589,7 +691,10 @@ public class MaximaManager extends MessageProcessor {
 			if(nioc.isOutgoing()) {
 				
 				if(mxhost != null) {
-					MinimaLogger.log("MAXIMA outgoing disconnection : "+nioc.getFullAddress()+" "+reconnect);
+					if(GeneralParams.MAXIMA_LOGS) {
+						MinimaLogger.log("MAXIMA outgoing disconnection : "+nioc.getFullAddress()+" "+reconnect);
+					}
+					nioc.setMaximaDisconnected();
 				}
 				
 				//Update the MLS Servers
@@ -620,11 +725,7 @@ public class MaximaManager extends MessageProcessor {
 					}
 				}
 				
-				//Delete from Hosts DB
-				if(!reconnect) {
-					maxdb.deleteHost(nioc.getFullAddress());
-				}
-				
+				//There has been a change..
 				NotifyMaximaHostsChanged(nioc.getFullAddress(), false);
 			}
 			
@@ -679,7 +780,9 @@ public class MaximaManager extends MessageProcessor {
 			getContactsManager().PostMessage(update);
 			
 			//Log it..
-			MinimaLogger.log("MLSGET address updated for "+contact.getName()+" "+contact.getCurrentAddress());
+			if(GeneralParams.MAXIMA_LOGS) {
+				MinimaLogger.log("MLSGET address updated for "+contact.getName()+" "+contact.getCurrentAddress());
+			}
 			
 		}else if(zMessage.getMessageType().equals(MAXIMA_RECMESSAGE)) {
 			
@@ -724,7 +827,7 @@ public class MaximaManager extends MessageProcessor {
 				
 				//Do we have it
 				if(client != null) {
-					if(mMaximaLogs) {
+					if(GeneralParams.MAXIMA_LOGS) {
 						MinimaLogger.log("MAXIMA message forwarded to client : "+tomaxima);
 					}
 					
@@ -735,7 +838,10 @@ public class MaximaManager extends MessageProcessor {
 					maximaMessageStatus(nioc,MAXIMA_OK);
 					
 				}else{
-					MinimaLogger.log("MAXIMA message received for Client we are not connected to : "+tomaxima);
+					
+					if(GeneralParams.MAXIMA_LOGS) {
+						MinimaLogger.log("MAXIMA message received for Client we are not connected to : "+tomaxima);
+					}
 				
 					//Notify that Client of the fail.. this makes external client disconnect ( internal just a ping )
 					maximaMessageStatus(nioc,MAXIMA_UNKNOWN);
@@ -784,7 +890,7 @@ public class MaximaManager extends MessageProcessor {
 			maxjson.put("msgid", hash.to0xString());
 			
 			//Do we log
-			if(mMaximaLogs) {
+			if(GeneralParams.MAXIMA_LOGS) {
 				MinimaLogger.log("MAXIMA : "+maxjson.toString());
 			}
 			
@@ -819,14 +925,28 @@ public class MaximaManager extends MessageProcessor {
 				
 				//Check Valid..
 				if(!uid.equals(nioc.getUID())) {
-					MinimaLogger.log("INVALID MAXCHECK REC:"+uid+" FROM:"+nioc.getUID());
-					return;
+					MinimaLogger.log("INVALID MAXCHECK REC:"+uid+" FROM:"+nioc.getUID()+" Could be multiple connections to the same Host..? @ "+nioc.getFullAddress());
+					//Multiple connections to the same host cause this error ?
+					//return;
 				}
-				
-				MinimaLogger.log("MAXIMA HOST accepted : "+nioc.getFullAddress());
 				
 				//Get the HOST
 				MaximaHost mxhost = maxdb.loadHost(nioc.getFullAddress());
+				if(mxhost == null) {
+					MinimaLogger.log("MaximaHost NOT Found on CHKCONNECT_APP "+nioc.getFullAddress()+" incoming:"+nioc.isIncoming());
+					return;
+				}
+				
+				//DOUBLE check - Are we connected..
+				if(nioc.hasMaximaDiscxonnected()) {
+					//Already disconnected
+					MinimaLogger.log("MaximaHost already disconnected at check connect "+nioc.getFullAddress()+" incoming:"+nioc.isIncoming());
+					return;
+				}
+				
+				if(GeneralParams.MAXIMA_LOGS) {
+					MinimaLogger.log("MAXIMA HOST accepted : "+nioc.getFullAddress());
+				}
 				
 				//Now we can use this as one of Our Addresses
 				mxhost.setConnected(1);
@@ -836,7 +956,10 @@ public class MaximaManager extends MessageProcessor {
 				
 				//OK.. add to our list
 				if(nioc.isMaximaMLS()) {
-					if(mMLSService.newMLSNode(nioc.getMaximaMLS())) {
+					
+					String niocmls = nioc.getMaximaMLS();
+					
+					if(mMLSService.newMLSNode(niocmls)) {
 						//Changed.. set new in DB
 						UserDB udb = MinimaDB.getDB().getUserDB();
 						udb.setString(MAXIMA_OLDMLSHOST, mMLSService.getOldMLSServer());
@@ -845,6 +968,14 @@ public class MaximaManager extends MessageProcessor {
 								
 						//Save this..
 						MinimaDB.getDB().saveUserDB();
+					}
+					
+					//Are we in slave mode..
+					if(GeneralParams.TXBLOCK_NODE) {
+						MinimaLogger.log("Slave Node force set STATIC MLS");
+						
+						//Set this as static MLS
+						setStaticMLS(true, niocmls);
 					}
 				}
 				
@@ -879,7 +1010,10 @@ public class MaximaManager extends MessageProcessor {
 				}
 				
 				//Is THIS user allowed to see this data
-				if(!mlspack.isValidPublicKey(maxmsg.mFrom.to0xString())) {
+				boolean allowed 	= mlspack.isValidPublicKey(maxmsg.mFrom.to0xString());
+				boolean ispermanent = mPermanentMaxima.contains(req.getPublicKey());
+				
+				if(!allowed && !ispermanent) {
 					MinimaLogger.log("Invalid MLS request for "+req.getPublicKey()+" by "+maxmsg.mFrom.to0xString());
 					maximaMessageStatus(nioc,MAXIMA_UNKNOWN);
 					return;
@@ -892,8 +1026,6 @@ public class MaximaManager extends MessageProcessor {
 				MiniData mlsdata = MiniData.getMiniDataVersion(mlsget);
 				
 				//Send that
-				MinimaLogger.log("MLS Req received : replying "+mlsget.toJSON());
-				
 				maximaMessageStatus(nioc,mlsdata);
 				
 			}else {
@@ -966,6 +1098,7 @@ public class MaximaManager extends MessageProcessor {
 	 * Update the MLS servers
 	 */
 	public void updateMLSServers(){
+		
 		//A list of all your contacts public keys
 		ArrayList<String> validpubkeys = new ArrayList<>();
 		
@@ -985,23 +1118,9 @@ public class MaximaManager extends MessageProcessor {
 		//Get the MiniData version
 		MiniData mlspackdata = MiniData.getMiniDataVersion(mlspack);
 		
-		//Refresh My MLS hosts..
-		if(allcontacts.size() > 0) {
-			//Send the message - to BOTH hosts.. old and new
-			PostMessage(maxima.createSendMessage(getMLSHost(),MAXIMA_MLS_SETAPP,mlspackdata));
-			if(!mIsStaticMLS) {
-				PostMessage(maxima.createSendMessage(getOldMLSHost(),MAXIMA_MLS_SETAPP,mlspackdata));
-			}
-			mHaveContacts = true;
-		}else {
-			if(mHaveContacts) {
-				PostMessage(maxima.createSendMessage(getMLSHost(),MAXIMA_MLS_SETAPP,mlspackdata));
-				if(!mIsStaticMLS) {
-					PostMessage(maxima.createSendMessage(getOldMLSHost(),MAXIMA_MLS_SETAPP,mlspackdata));
-				}
-			}
-			mHaveContacts = false;
-		}
+		//Refresh My MLS hosts.. both old and new
+		PostMessage(maxima.createSendMessage(getMLSHost(),MAXIMA_MLS_SETAPP,mlspackdata));
+		PostMessage(maxima.createSendMessage(getOldMLSHost(),MAXIMA_MLS_SETAPP,mlspackdata));
 	}
 	
 	/**

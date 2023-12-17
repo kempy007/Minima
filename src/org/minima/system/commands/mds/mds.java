@@ -18,6 +18,7 @@ import org.minima.system.mds.handler.CMDcommand;
 import org.minima.system.mds.pending.PendingCommand;
 import org.minima.system.params.GeneralParams;
 import org.minima.utils.MiniFile;
+import org.minima.utils.MinimaLogger;
 import org.minima.utils.ZipExtractor;
 import org.minima.utils.json.JSONArray;
 import org.minima.utils.json.JSONObject;
@@ -100,12 +101,22 @@ public class mds extends Command {
 		
 		if(action.equals("list")) {
 			
+			MDSManager mdsman = Main.getInstance().getMDSManager();
+			
 			//List the current MDS apps..
 			ArrayList<MiniDAPP> dapps = db.getAllMiniDAPPs();
 			
 			JSONArray arr = new JSONArray();
 			for(MiniDAPP md : dapps) {
-				arr.add(md.toJSON());
+				
+				//Get the MiniDAPP JSON
+				JSONObject jmds = md.toJSON(); 
+				
+				//Get the Session ID
+				String sessionid = mdsman.convertMiniDAPPID(md.getUID());
+				jmds.put("sessionid", sessionid);
+				
+				arr.add(jmds);
 			}
 
 			JSONObject mds = new JSONObject();
@@ -136,37 +147,41 @@ public class mds extends Command {
 			//Get the uid
 			String uid = getParam("uid");
 			
-			//Get all the pending commands..
-			ArrayList<PendingCommand> allpending = Main.getInstance().getMDSManager().getAllPending(); 
-			
-			//Make into JSONArray
-			boolean found = false;
-			for(PendingCommand pending : allpending) {
-				if(pending.getUID().equals(uid)) {
+			//Get the pending command
+			PendingCommand pending = Main.getInstance().getMDSManager().getPendingCommand(uid);
+			String minidappid = "";
+			if(pending!=null) {
+				
+				//Get the MiniDAPP  ID
+				minidappid = pending.getMiniDAPP().getString("uid",""); 
+				
+				//RUN it.. as normal 0x00 - so is accepted
+				CMDcommand cmd 	= new CMDcommand("0x00", pending.getCommand());
+				String result 	= cmd.runCommand();
+				
+				JSONObject jsonres = new JSONObject();
+				boolean status = false;
+				if(result.startsWith("{")) {
+					JSONObject response = (JSONObject) new JSONParser().parse(result);
+					status = (boolean) response.get("status");
 					
-					//RUN it.. as normal 0x00 - so is accepted
-					CMDcommand cmd 	= new CMDcommand("0x00", pending.getCommand());
-					String result 	= cmd.runCommand();
+					ret.put("response", response);
+				
+					jsonres = response;
 					
-					if(result.startsWith("{")) {
-						ret.put("response", (JSONObject) new JSONParser().parse(result));
-					
-					}else if(result.startsWith("[")) {
-						ret.put("response", (JSONArray) new JSONParser().parse(result));
-					
-					}else {
-						ret.put("response", result);
-					}
-					
-					found = true;
-					break;
+				}else if(result.startsWith("[")) {
+					ret.put("response", (JSONArray) new JSONParser().parse(result));
+				
+				}else {
+					ret.put("response", result);
 				}
-			}
 			
-			//Did we find it..
-			if(found) {
 				//Remove it from the list
 				Main.getInstance().getMDSManager().removePending(uid);
+				
+				//Post a message to the MiniDAPP
+				sendPendingResult(minidappid, uid, true, status, jsonres);
+				
 			}else {
 				throw new CommandException("Pending UID not found : "+uid);
 			}
@@ -176,13 +191,24 @@ public class mds extends Command {
 			//Get the uid
 			String uid = getParam("uid");
 			
-			//Remove it from the list
-			boolean found = Main.getInstance().getMDSManager().removePending(uid);
-			if(!found) {
+			PendingCommand pending = Main.getInstance().getMDSManager().getPendingCommand(uid);
+			String minidappid = "";
+			if(pending!=null) {
+				
+				//Get the MiniDAPP  ID
+				minidappid = pending.getMiniDAPP().getString("uid",""); 
+			
+				//Remove
+				Main.getInstance().getMDSManager().removePending(uid);
+				
+			}else {
 				throw new CommandException("Pending UID not found : "+uid);
 			}
 			
 			ret.put("response", "Pending action removed : "+uid);
+			
+			//Post a message to the MiniDAPP
+			sendPendingResult(minidappid, uid, false, false, new JSONObject());
 			
 		}else if(action.equals("install")) {
 		
@@ -197,7 +223,7 @@ public class mds extends Command {
 			FileInputStream fis = new FileInputStream(minidapp);
 			
 			//Where is it going..
-			String rand = MiniData.getRandomData(16).to0xString();
+			String rand = MiniData.getRandomData(32).to0xString();
 			
 			//The file where the package is extracted..
 			File dest 	= new File( Main.getInstance().getMDSManager().getWebFolder() , rand);
@@ -250,6 +276,12 @@ public class mds extends Command {
 			String uid = getParam("uid");
 			if(!uid.startsWith("0x")) {
 				throw new CommandException("Invalid UID for MiniDAPP");
+			}
+			
+			//Make sure not the MiniHUB..
+			String minihub = MinimaDB.getDB().getUserDB().getDefaultMiniHUB();
+			if(uid.equals(minihub)) {
+				throw new CommandException("Cannot delete the MiniHUB");
 			}
 			
 			//Delete from the DB
@@ -372,6 +404,12 @@ public class mds extends Command {
 				throw new CommandException("MiniDAPP not found : "+uid);
 			}
 			
+			//Make sure not the MiniHUB..
+			String minihub = MinimaDB.getDB().getUserDB().getDefaultMiniHUB();
+			if(uid.equals(minihub)) {
+				throw new CommandException("Cannot change permissions for the MiniHUB");
+			}
+			
 			//Now update the TRUST level..
 			if(trust.equals("write")) {
 				md.setPermission("write");
@@ -403,22 +441,36 @@ public class mds extends Command {
 				
 					//Get the File name
 					String uid = dapp.getName();
-					db.deleteMiniDAPP(uid);
 					
-					//Load the conf file..
-					MiniString data = new MiniString(MiniFile.readCompleteFile(new File(dapp,"dapp.conf"))); 	
-					
-					//Now create the JSON..
-					JSONObject jsonconf = (JSONObject) new JSONParser().parse(data.toString());
-					
-					//Create the MiniDAPP
-					MiniDAPP md = new MiniDAPP(uid, jsonconf);
-					
-					//Now add to the DB
-					db.insertMiniDAPP(md);
-					
-					//Add to the final array
-					arr.add(md.toJSON());
+					//Get the MiniDAPP
+					MiniDAPP mdorig = db.getMiniDAPP(uid);
+					if(mdorig != null) {
+						String perm = mdorig.getPermission();
+						
+						db.deleteMiniDAPP(uid);
+						
+						//Load the conf file..
+						MiniString data = new MiniString(MiniFile.readCompleteFile(new File(dapp,"dapp.conf"))); 	
+						
+						//Now create the JSON..
+						JSONObject jsonconf = (JSONObject) new JSONParser().parse(data.toString());
+						jsonconf.put("permission", perm);
+						
+						//Create the MiniDAPP
+						MiniDAPP md = new MiniDAPP(uid, jsonconf);
+						
+						//Now add to the DB
+						db.insertMiniDAPP(md);
+						
+						//Add to the final array
+						arr.add(md.toJSON());
+					}else {
+						
+						MinimaLogger.log("EMPTY MiniDAPP folder deleted : "+dapp.getAbsolutePath());
+						
+						//Delete it..
+						MiniFile.deleteFileOrFolder(dapp.getAbsolutePath(), dapp);
+					}
 				}
 			}
 			
@@ -428,11 +480,29 @@ public class mds extends Command {
 			
 			//There has been a change
 			Main.getInstance().getMDSManager().PostMessage(MDSManager.MDS_MINIDAPPS_RESETALL);
+		
+		}else {
+			throw new CommandException("Unknown action : "+action);
 		}
 		
 		return ret;
 	}
 
+	public void sendPendingResult(String zMiniDAPPID, String zPendinUID, boolean zAccept, boolean zStatus, JSONObject zResult) {
+		
+		//Is it a valid MiniDAPP
+		if(!zMiniDAPPID.equals("")) {
+			
+			JSONObject res = new JSONObject();
+			res.put("uid", zPendinUID);
+			res.put("accept", zAccept);
+			res.put("status", zStatus);
+			res.put("result", zResult);
+			
+			Main.getInstance().PostNotifyEvent("MDS_PENDING", res, zMiniDAPPID);
+		}
+	}
+	
 	@Override
 	public Command getFunction() {
 		return new mds();

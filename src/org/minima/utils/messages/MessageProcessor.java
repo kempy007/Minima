@@ -77,17 +77,15 @@ public abstract class MessageProcessor extends MessageStack implements Runnable{
     	return mShutDownComplete;
     }
     
-    public void waitToShutDown(boolean zUseLimit) {
+    public void waitToShutDown() {
     	long timewaited = 0;
     	while(!isShutdownComplete()) {
 			try {Thread.sleep(250);} catch (InterruptedException e) {}
 			timewaited +=250;
-			if(timewaited>10000) {
-				timewaited = 0;
+			if(timewaited>15000) {
 				MinimaLogger.log("Failed to shutdown in 10 secs for "+mName);
-				if(zUseLimit) {
-					break;
-				}
+				mMainThread.interrupt();
+				return;
 			}
 		}
     }
@@ -140,8 +138,14 @@ public abstract class MessageProcessor extends MessageStack implements Runnable{
                     }
                     
                 }catch(Error noclass){
-                	MinimaLogger.log("**SERIOUS SETUP ERROR "+msg.getMessageType()+" "+noclass.toString());
+                	MinimaLogger.log("**SERIOUS ERROR "+msg.getMessageType()+" "+noclass.toString());
                 	
+                	//Now the Stack Trace
+            		for(StackTraceElement stack : noclass.getStackTrace()) {
+            			//Print it..
+            			MinimaLogger.log("     "+stack.toString());
+            		}
+            		
                 }catch(Exception exc){
                 	MinimaLogger.log("MESSAGE PROCESSING ERROR @ "+msg.getMessageType());
                 	MinimaLogger.log(exc);
@@ -170,7 +174,8 @@ public abstract class MessageProcessor extends MessageStack implements Runnable{
         }
         
         //All done..
-        mShutDownComplete = true;
+        mRunning 			= false;
+        mShutDownComplete 	= true;
     }
     
     /**

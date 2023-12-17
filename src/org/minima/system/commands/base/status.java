@@ -21,7 +21,6 @@ import org.minima.objects.base.MiniNumber;
 import org.minima.system.Main;
 import org.minima.system.brains.TxPoWGenerator;
 import org.minima.system.commands.Command;
-import org.minima.system.commands.CommandException;
 import org.minima.system.network.NetworkManager;
 import org.minima.system.params.GeneralParams;
 import org.minima.system.params.GlobalParams;
@@ -57,7 +56,7 @@ public class status extends Command {
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"clean"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"clean","debug","complete"}));
 	}
 	
 	@Override
@@ -70,7 +69,8 @@ public class status extends Command {
 		}
 
 		//Are we verbose output
-		boolean debug = getBooleanParam("debug",false);
+		boolean debug 		= getBooleanParam("debug",false);
+		boolean complete 	= getBooleanParam("complete",false);
 		
 		//The Database
 		TxPoWDB txpdb 		= MinimaDB.getDB().getTxPoWDB();
@@ -90,25 +90,28 @@ public class status extends Command {
 		//Uptime..
 		details.put("uptime", MiniFormat.ConvertMilliToTime(Main.getInstance().getUptimeMilli()));
 		
-//		//How many Devices..
-//		BigDecimal blkweightdec 	= new BigDecimal(txptree.getTip().getTxPoW().getBlockDifficulty().getDataValue());
-//		BigDecimal blockWeight 		= Crypto.MAX_VALDEC.divide(blkweightdec, MathContext.DECIMAL32);
-//
-//		//What is the user hashrate..
-//		MiniNumber userhashrate 	= MinimaDB.getDB().getUserDB().getHashRate();
-//		if(userhashrate.isLess(Magic.MIN_HASHES)) {
-//			userhashrate = Magic.MIN_HASHES;
-//		}
-//		MiniNumber ratio 			= new MiniNumber(blockWeight).div(userhashrate);
+		//Is the Wallet Locked..
+		details.put("locked", !MinimaDB.getDB().getWallet().isBaseSeedAvailable());
 		
-//		MinimaLogger.log("blkweight    : "+blockWeight);
-//		MinimaLogger.log("userhashrate : "+userhashrate);
-//		MinimaLogger.log("ratio        : "+ratio.toString());
-//		MiniNumber pulsespeed 		= MiniNumber.THOUSAND.div(new MiniNumber(GeneralParams.USER_PULSE_FREQ));
-//		MiniNumber usersperpulse 	= MiniNumber.ONE.div(new MiniNumber(""+pulsespeed).div(GlobalParams.MINIMA_BLOCK_SPEED));
-//		MiniNumber totaldevs 		= usersperpulse.mult(ratio).floor();
-
-		//details.put("devices", ratio.ceil().toString());
+		//How many Devices..
+		if(complete) {
+			BigDecimal blkweightdec 	= new BigDecimal(txptree.getTip().getTxPoW().getBlockDifficulty().getDataValue());
+			BigDecimal blockWeight 		= Crypto.MAX_VALDEC.divide(blkweightdec, MathContext.DECIMAL32);
+	
+			//What is the user hashrate..
+			MiniNumber userhashrate 	= MinimaDB.getDB().getUserDB().getHashRate();
+			if(userhashrate.isLess(Magic.MIN_HASHES)) {
+				userhashrate = Magic.MIN_HASHES;
+			}
+			MiniNumber ratio 			= new MiniNumber(blockWeight).div(userhashrate);
+			
+			//Are we in Normal mode..
+			if(!Main.getInstance().isNormalMineMode()) {
+				ratio = ratio.mult(MiniNumber.TEN);
+			}
+			
+			details.put("devices", ratio.ceil().toString());
+		}
 
 		//The Current total Length of the Minima Chain
 		BigInteger chainweight 	= BigInteger.ZERO;
@@ -163,6 +166,17 @@ public class status extends Command {
 		database.put("userdb", MiniFormat.formatSize(MinimaDB.getDB().getUserDBFileSize()));
 		database.put("p2pdb", MiniFormat.formatSize(MinimaDB.getDB().getP2PFileSize()));
 		
+		if(complete) {
+
+			long mdsfiles = MiniFile.getTotalFileSize(Main.getInstance().getMDSManager().getRootMDSFolder());
+			database.put("mds", MiniFormat.formatSize(mdsfiles));
+			
+			//Get ALKL the files
+			JSONObject allthefiles = new JSONObject();
+			MiniFile.getTotalFileSizeWithNames(new File(GeneralParams.DATA_FOLDER), allthefiles,3,0);
+			database.put("allfiles", allthefiles);
+		}
+		
 		files.put("files", database);
 
 		details.put("memory", files);
@@ -193,11 +207,12 @@ public class status extends Command {
 				
 				MiniNumber blockdiff 		= startblock.getBlockNumber().sub(endblock.getBlockNumber()); 
 				if(blockdiff.isEqual(MiniNumber.ZERO)) {
-					throw new CommandException("ZERO blockdiff on speed check.. start:"+startblock.getBlockNumber()+" end:"+endblock.getBlockNumber());
+					//throw new CommandException("ZERO blockdiff on speed check.. start:"+startblock.getBlockNumber()+" end:"+endblock.getBlockNumber());
+					tree.put("speed", MiniNumber.MINUSONE);
+				}else {
+					MiniNumber speed = TxPoWGenerator.getChainSpeed(startblock, blockdiff);
+					tree.put("speed", speed.setSignificantDigits(5));
 				}
-				
-				MiniNumber speed = TxPoWGenerator.getChainSpeed(startblock, blockdiff);
-				tree.put("speed", speed.setSignificantDigits(5));
 			}
 			
 			MiniData difficulty = new MiniData(txptree.getTip().getTxPoW().getBlockDifficulty().getBytes(),32);
@@ -251,10 +266,31 @@ public class status extends Command {
 		if(debug) {
 			MinimaLogger.log("txpowdb done..");
 		}
-		database.put("archivedb", arch.getSize());
-		if(debug) {
-			MinimaLogger.log("archivedb done..");
-		}
+		
+//		if(complete) {
+//			//Archive DB data
+//			JSONObject archdb 	= new JSONObject();
+//			int size 			= arch.getSize();
+//			Cascade archcasc 	= arch.loadCascade(); 
+//			archdb.put("size", size);
+//			if(size>0) {
+//				archdb.put("start", arch.loadLastBlock().getTxPoW().getBlockNumber().toString());
+//				archdb.put("startdate", new Date(arch.loadLastBlock().getTxPoW().getTimeMilli().getAsLong()).toString());
+//				archdb.put("end", arch.loadFirstBlock().getTxPoW().getBlockNumber().toString());
+//				if(archcasc!=null) {
+//					archdb.put("cascadetip", archcasc.getTip().getTxPoW().getBlockNumber());	
+//				}
+//			}
+//			database.put("archivedb", archdb);
+//			if(debug) {
+//				MinimaLogger.log("archivedb done..");
+//			}
+//		}else {
+			database.put("archivedb", arch.getSize());
+			if(debug) {
+				MinimaLogger.log("archivedb done..");
+			}
+//		}
 		
 		//Add ther adatabse
 		details.put("txpow", database);
@@ -284,4 +320,15 @@ public class status extends Command {
 		return new status();
 	}
 
+	public static void main(String[] zARgs) {
+		
+		File ff = new File("C:\\Users\\spartacusrex\\.minima\\1.0");
+		
+		JSONObject files = new JSONObject();
+		MiniFile.getTotalFileSizeWithNames(ff, files,3,0);
+		
+		System.out.println(MiniFormat.JSONPretty(files));
+		
+	}
+	
 }

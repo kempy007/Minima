@@ -6,7 +6,6 @@ import java.util.Arrays;
 import org.minima.system.Main;
 import org.minima.system.commands.Command;
 import org.minima.system.network.webhooks.NotifyManager;
-import org.minima.system.params.GeneralParams;
 import org.minima.utils.json.JSONArray;
 import org.minima.utils.json.JSONObject;
 
@@ -33,6 +32,9 @@ public class webhooks extends Command {
 				+ "hook: (optional)\n"
 				+ "    A URL, must be a POST endpoint.\n"
 				+ "\n"
+				+ "filter: (optional)\n"
+				+ "    Filters which events get posted.\n"
+				+ "\n"
 				+ "Examples:\n"
 				+ "\n"
 				+ "webhooks action:list\n"
@@ -41,12 +43,14 @@ public class webhooks extends Command {
 				+ "\n"
 				+ "webhooks action:remove hook:http://127.0.0.1/myapi.php\n"
 				+ "\n"
+				+ "webhooks action:add hook:http://127.0.0.1/myapi.php filter:MINING\n"
+				+ "\n"
 				+ "webhooks action:clear\n";
 	}
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"action","hook"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"action","hook","filter"}));
 	}
 	
 	@Override
@@ -57,7 +61,7 @@ public class webhooks extends Command {
 		String action = getParam("action", "list");
 		
 		//Get the Notify Manager
-		NotifyManager notify = Main.getInstance().getNetworkManager().getNotifyManager();
+		NotifyManager notify = Main.getInstance().getNotifyManager();
 		
 		//The response..
 		JSONObject resp = new JSONObject();
@@ -65,8 +69,12 @@ public class webhooks extends Command {
 		
 		if(action.equals("add")) {
 			
+			String filter = getParam("filter","");
 			String hook = getParam("hook");
-			notify.addHook(hook);
+			
+			String fullhook=filter+"#"+hook;
+			
+			notify.addHook(fullhook);
 			
 		}else if(action.equals("remove")) {
 			

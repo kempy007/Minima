@@ -34,6 +34,21 @@ public class TxPoWGenerator {
 	private final static MiniNumber MAX_SPBOUND_DIFFICULTY = new MiniNumber("2.0");
 	private final static MiniNumber MIN_SPBOUND_DIFFICULTY = new MiniNumber("0.5");
 	
+	
+	/**
+	 * Is the Mempool full
+	 */
+	private static boolean 		MEMPOOL_FULL 		= false;
+	private static MiniNumber 	MIN_MEMPOOL_BURN 	= MiniNumber.ZERO;
+	
+	public static boolean isMempoolFull() {
+		return MEMPOOL_FULL;
+	}
+	
+	public static MiniNumber getMinMempoolBurn() {
+		return MIN_MEMPOOL_BURN;
+	}
+	
 	/**
 	 * Calculate a Difficulty Hash for a given hash number
 	 */
@@ -65,10 +80,10 @@ public class TxPoWGenerator {
 		MiniNumber mintime 	= getMedianTimeBlock(tip, GlobalParams.MEDIAN_BLOCK_CALC*2).getTxPoW().getTimeMilli();
 		MiniNumber maxtime 	= mintime.add(TxPoWChecker.MAX_TIME_FUTURE); 
 		if(millitime.isLess(mintime)) {
-			MinimaLogger.log("NEW TxPoW time too far back.. setting minimum");
+			//MinimaLogger.log("NEW TxPoW time too far back.. setting minimum");
 			millitime = mintime.add(new MiniNumber(1000*50));
 		}else if(millitime.isMore(maxtime)) {
-			MinimaLogger.log("NEW TxPoW time too far in future.. setting maximum");
+			//MinimaLogger.log("NEW TxPoW time too far in future.. setting maximum");
 			millitime = maxtime;
 		}
 		
@@ -125,7 +140,7 @@ public class TxPoWGenerator {
 		if(minhash.isMore(txpowmagic.getMinTxPowWork())) {
 			
 			//Warn them..
-			MinimaLogger.log("WARNING : Your Hashrate is lower than the current Minimum allowed by the network");
+			//MinimaLogger.log("WARNING : Your Hashrate is lower than the current Minimum allowed by the network");
 			
 			//Add 10%.. to give yourself some space
 			BigDecimal hashes 	= txpowmagic.getMinTxPowWork().getDataValueDecimal();
@@ -149,10 +164,13 @@ public class TxPoWGenerator {
 		});
 		
 		//MAX number of transactions in mempool.. 1 hrs worth of blocks..
-		int max 					= tip.getTxPoW().getMagic().getMaxNumTxns().getAsInt() * 12 * 6;
+		//int max 					= tip.getTxPoW().getMagic().getMaxNumTxns().getAsInt() * 12 * 6;
+		int max 					= 5000;
+		
 		int counter					= 0;
 		ArrayList<TxPoW> newmempool = new ArrayList<>();
 		TxPoWDB txpdb 				= MinimaDB.getDB().getTxPoWDB();
+		MEMPOOL_FULL 				= false;
 		for(TxPoW memtxp : mempool) {
 			if(counter<max) {
 				newmempool.add(memtxp);
@@ -160,6 +178,14 @@ public class TxPoWGenerator {
 				//Remove from RAMDB..
 				MinimaLogger.log("MEMPOOL MAX SIZE REACHED : REMOVED id:"+memtxp.getTxPoWID()+" burn:"+memtxp.getBurn());
 				txpdb.removeMemPoolTxPoW(memtxp.getTxPoWID());
+				
+				//No more new Txpow forwarded with a low burn
+				if(!MEMPOOL_FULL) {
+					MEMPOOL_FULL = true;
+					
+					//Store this as the min burn
+					MIN_MEMPOOL_BURN = memtxp.getBurn();
+				}
 			}
 			counter++;
 		}
@@ -202,7 +228,7 @@ public class TxPoWGenerator {
 				//Check how many times we have checked this TxPoW - and rejected it
 				if(memtxp.getCheckRejectNumber()>3) {
 					//No good..
-					MinimaLogger.log("TxPoW checked too many times.. "+memtxp.getTxPoWID());
+					//MinimaLogger.log("TxPoW checked too many times.. "+memtxp.getTxPoWID());
 					valid = false;
 				}
 				
@@ -246,7 +272,7 @@ public class TxPoWGenerator {
 				
 					//Check against the Magic Numbers
 					if(memtxp.getSizeinBytesWithoutBlockTxns() > txpowmagic.getMaxTxPoWSize().getAsLong()) {
-						MinimaLogger.log("Mempool txn too big.. "+memtxp.getTxPoWID());
+						MinimaLogger.log("Mempool txn too big.. "+memtxp.getTxPoWID()+" size:"+memtxp.getSizeinBytesWithoutBlockTxns()+" max:"+txpowmagic.getMaxTxPoWSize().getAsLong());
 						valid = false;
 					}else if(memtxp.getTxnDifficulty().isMore(txpowmagic.getMinTxPowWork())) {
 						MinimaLogger.log("Mempool txn TxPoW too low.. "+memtxp.getTxPoWID());
@@ -255,7 +281,7 @@ public class TxPoWGenerator {
 				}
 			
 				//Check if Valid!
-				if(valid && TxPoWChecker.checkTxPoWSimple(tip.getMMR(), memtxp, txpow)) {
+				if(valid && TxPoWChecker.checkTxPoWSimple(tip.getMMR(), memtxp, txpow, false)) {
 					
 					//Add to our list
 					chosentxns.add(memtxp);
@@ -291,7 +317,7 @@ public class TxPoWGenerator {
 			//Was it valid
 			if(!valid) {
 				//Invalid TxPoW - remove from mempool
-				MinimaLogger.log("Invalid TxPoW in mempool.. removing.. "+memtxp.getTxPoWID());
+				//MinimaLogger.log("Invalid TxPoW in mempool.. removing.. "+memtxp.getTxPoWID());
 				MinimaDB.getDB().getTxPoWDB().removeMemPoolTxPoW(memtxp.getTxPoWID());
 			}
 			
@@ -313,6 +339,9 @@ public class TxPoWGenerator {
 		txpow.setMMRRoot(root.getData());
 		txpow.setMMRTotal(root.getValue());
 		
+		//Calculate the txpowid / size..
+		txpow.calculateTXPOWID();
+				
 		return txpow;
 	}
 	

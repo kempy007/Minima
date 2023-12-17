@@ -1,8 +1,14 @@
 package org.minima.system.mds.runnable;
 
+import java.io.File;
+import java.io.IOException;
+
+import org.minima.objects.base.MiniString;
 import org.minima.system.mds.MDSManager;
 import org.minima.system.mds.handler.CMDcommand;
 import org.minima.system.mds.handler.NOTIFYcommand;
+import org.minima.system.mds.runnable.api.APIService;
+import org.minima.utils.MiniFile;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.json.JSONObject;
 import org.mozilla.javascript.Context;
@@ -50,6 +56,16 @@ public class MDSJS {
 	public FILEService file;
 	
 	/**
+	 * The KeyPair service
+	 */
+	public KEYPAIRService keypair;
+	
+	/**
+	 * The API Service
+	 */
+	public APIService api;
+	
+	/**
 	 * Main Constructor
 	 * 
 	 * @param zMDS
@@ -67,6 +83,8 @@ public class MDSJS {
 		net 			= new NETService(zMiniDAPPID, zMiniName, zContext, zScope);
 		comms			= new COMMSService(mMDS, zMiniDAPPID, zMiniName, zContext, zScope);
 		file			= new FILEService(mMDS, zMiniDAPPID, zMiniName, zContext, zScope);
+		keypair			= new KEYPAIRService(mMDS, zMiniDAPPID, zMiniName, zContext, zScope);
+		api				= new APIService(mMDS, zMiniDAPPID, zMiniName, zContext, zScope);
 	}
 	
 	public String getMiniDAPPID() {
@@ -95,7 +113,15 @@ public class MDSJS {
 	 * Simple Log
 	 */
 	public void log(String zMessage) {
-		MinimaLogger.log("MDS_"+mMiniDAPPName+"_"+mMiniDAPPID+" > "+zMessage, false);
+		log(zMessage, false);
+	}
+	
+	public void log(String zMessage, boolean zNotifyAll) {
+		if(!zNotifyAll) {
+			MinimaLogger.log("MDS_"+mMiniDAPPName+"_"+mMiniDAPPID+" > [NOTIFY:"+zNotifyAll+"] "+zMessage, zNotifyAll);
+		}else {
+			MinimaLogger.log("MDS_"+mMiniDAPPName+"_"+mMiniDAPPID+" > "+zMessage, zNotifyAll);
+		}
 	}
 	
 	/**
@@ -122,18 +148,6 @@ public class MDSJS {
 	
 		//Send to the Runnable
 		callMainCallback(initnew);
-	}
-	
-	/**
-	 * Send a SHUTDOWN message
-	 */
-	public void sendshutdown() {
-		//Create the init message
-		JSONObject shutd = new JSONObject();
-		shutd.put("event", "MDSSHUTDOWN");
-	
-		//Send to the Runnable
-		callMainCallback(shutd);
 	}
 	
 	/**
@@ -198,6 +212,40 @@ public class MDSJS {
 		//Create a Command
 		NOTIFYcommand notify = new NOTIFYcommand(mMiniDAPPID, "", "", false);
 		notify.runCommand();
+	}
+	
+	/**
+	 * Load a JS file
+	 */
+	public void load(String zFile) {
+		
+		//Check no ..
+		if(zFile.indexOf("..")!=-1) {
+			log("Invalid file for load as has .. in location");
+			return;
+		}
+		
+		//Get base folder..
+		File base = mMDS.getMiniDAPPWebFolder(mMiniDAPPID);
+		
+		//Load a file..
+		File loadfile = new File(base,zFile);
+		
+		//Load the code..
+		byte[] codedata;
+		try {
+			codedata = MiniFile.readCompleteFile(loadfile);
+		} catch (IOException e) {
+			//File not found..
+			MinimaLogger.log(e.toString());
+			return;
+		}
+		
+		//Convert to CODE..
+		String code = new String(codedata, MiniString.MINIMA_CHARSET);
+		
+		//Run in scope..
+		mContext.evaluateString(mScope, code, "<mds_"+mMiniDAPPID+"_loaded_"+zFile+">", 1, null);
 	}
 	
 	/**

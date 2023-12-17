@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import org.minima.objects.TxPoW;
 import org.minima.objects.base.MiniByte;
 import org.minima.objects.base.MiniData;
+import org.minima.objects.base.MiniNumber;
 import org.minima.system.params.GeneralParams;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.SqlDB;
@@ -20,7 +21,12 @@ public class TxPoWSqlDB extends SqlDB {
 	/**
 	 * How long does data remain the SQL DB in milli seconds
 	 */
-	public long MAX_SQL_MILLI = 1000 * 60 * 60 * 24 * GeneralParams.NUMBER_DAYS_SQLTXPOWDB;
+	public static long MAX_SQL_MILLI = 1000 * 60 * 60 * 24 * GeneralParams.NUMBER_DAYS_SQLTXPOWDB;
+	
+	/**
+	 * The default MAX Relevant TxPoW
+	 */
+	public static MiniNumber MAX_RELEVANT_TXPOW = MiniNumber.HUNDRED;
 	
 	/**
 	 * Prepared SQL statements
@@ -31,6 +37,8 @@ public class TxPoWSqlDB extends SqlDB {
 	PreparedStatement SQL_TOTAL_TXPOW 		= null;
 	PreparedStatement SQL_DELETE_TXPOW 		= null;
 	PreparedStatement SQL_EXISTS 			= null;
+	
+	PreparedStatement SQL_SELECT_RELEVANT 	= null;
 	
 	public TxPoWSqlDB() {
 		super();
@@ -47,13 +55,14 @@ public class TxPoWSqlDB extends SqlDB {
 			
 			//Create main table
 			String create = "CREATE TABLE IF NOT EXISTS `txpow` ("
-							+ "  `id` IDENTITY PRIMARY KEY,"
+							+ "  `id` bigint auto_increment,"
 							+ "  `txpowid` varchar(80) NOT NULL UNIQUE,"
 							+ "  `isblock` tinyint NOT NULL,"
 							+ "  `istransaction` tinyint NOT NULL,"
 							+ "  `parentid` varchar(80) NOT NULL,"
 							+ "  `timemilli` bigint NOT NULL,"
-							+ "  `txpowdata` blob NOT NULL"
+							+ "  `txpowdata` blob NOT NULL,"
+							+ "  `isrelevant` tinyint NOT NULL"
 							+ ")";
 			
 			//Run it..
@@ -69,21 +78,55 @@ public class TxPoWSqlDB extends SqlDB {
 			stmt.close();
 			
 			//Create some prepared statements..
-			String insert 		= "INSERT IGNORE INTO txpow ( txpowid, isblock, istransaction, parentid, timemilli, txpowdata ) VALUES ( ?, ? ,? ,? ,? ,? )";
+			String insert 		= "INSERT IGNORE INTO txpow ( txpowid, isblock, istransaction, parentid, timemilli, txpowdata, isrelevant ) VALUES ( ?, ? ,? ,? ,? ,? ,? )";
 			SQL_INSERT_TXPOW 	= mSQLConnection.prepareStatement(insert);
 			
 			//Select 
 			SQL_SELECT_TXPOW 	= mSQLConnection.prepareStatement("SELECT txpowdata FROM txpow WHERE txpowid=?");
 			SQL_SELECT_CHILDREN	= mSQLConnection.prepareStatement("SELECT txpowid FROM txpow WHERE isblock=1 AND parentid=?");
 			SQL_TOTAL_TXPOW		= mSQLConnection.prepareStatement("SELECT COUNT(*) AS tot FROM txpow");
-			SQL_DELETE_TXPOW	= mSQLConnection.prepareStatement("DELETE FROM txpow WHERE timemilli < ?");
+			SQL_DELETE_TXPOW	= mSQLConnection.prepareStatement("DELETE FROM txpow WHERE timemilli < ? AND isrelevant=0");
 			SQL_EXISTS			= mSQLConnection.prepareStatement("SELECT txpowid FROM txpow WHERE txpowid=?");
 		
+			SQL_SELECT_RELEVANT = mSQLConnection.prepareStatement("SELECT * FROM txpow WHERE isrelevant=1 ORDER BY timemilli DESC LIMIT ?");
 	}
 	
+	public void wipeDB() throws SQLException {
+		
+		//Make sure..
+		checkOpen();
+		
+		//One last statement
+		Statement stmt = mSQLConnection.createStatement();
 	
-	public synchronized boolean addTxPoW(TxPoW zTxPoW) {
+		//First wipe everything..
+		stmt.execute("DROP ALL OBJECTS");
+		
+		//Create main table
+		String create = "CREATE TABLE IF NOT EXISTS `txpow` ("
+						+ "  `id` bigint auto_increment,"
+						+ "  `txpowid` varchar(80) NOT NULL UNIQUE,"
+						+ "  `isblock` tinyint NOT NULL,"
+						+ "  `istransaction` tinyint NOT NULL,"
+						+ "  `parentid` varchar(80) NOT NULL,"
+						+ "  `timemilli` bigint NOT NULL,"
+						+ "  `txpowdata` blob NOT NULL,"
+						+ "  `isrelevant` tinyint NOT NULL"
+						+ ")";
+		
+		//Run it..
+		stmt.execute(create);
+		
+		//That's it..
+		stmt.close();
+	}
+	
+	public synchronized boolean addTxPoW(TxPoW zTxPoW, boolean zIsRelevant) {
 		try {
+			
+			//Make sure..
+			checkOpen();
+			
 			//get the MiniData version..
 			MiniData txdata = MiniData.getMiniDataVersion(zTxPoW);
 			
@@ -97,8 +140,15 @@ public class TxPoWSqlDB extends SqlDB {
 			SQL_INSERT_TXPOW.setString(4, zTxPoW.getParentID().to0xString());
 			SQL_INSERT_TXPOW.setLong(5, System.currentTimeMillis());
 			
-			//And finally the actual bytes
+			//The actual bytes
 			SQL_INSERT_TXPOW.setBytes(6, txdata.getBytes());
+			
+			//Is it relevant
+			if(zIsRelevant) {
+				SQL_INSERT_TXPOW.setInt(7, 1);
+			}else {
+				SQL_INSERT_TXPOW.setInt(7, 0);
+			}
 			
 			//Do it.
 			SQL_INSERT_TXPOW.execute();
@@ -114,6 +164,10 @@ public class TxPoWSqlDB extends SqlDB {
 
 	public synchronized TxPoW getTxPoW(String zTxPoWID) {
 		try {
+			
+			//Make sure..
+			checkOpen();
+			
 			//Get the query ready
 			SQL_SELECT_TXPOW.clearParameters();
 			
@@ -149,6 +203,9 @@ public class TxPoWSqlDB extends SqlDB {
 		ArrayList<String> txpows = new ArrayList<>();
 
 		try {
+			//Make sure..
+			checkOpen();
+			
 			//Get the query ready
 			SQL_SELECT_CHILDREN.clearParameters();
 			
@@ -174,9 +231,52 @@ public class TxPoWSqlDB extends SqlDB {
 		
 		return txpows;
 	}
+	
+	public synchronized ArrayList<TxPoW> getAllRelevant(int zLimit) {
+		ArrayList<TxPoW> txpows = new ArrayList<>();
+
+		try {
+			
+			//Make sure..
+			checkOpen();
+			
+			//Get the query ready
+			SQL_SELECT_RELEVANT.clearParameters();
+			
+			//Set the Limit..
+			SQL_SELECT_RELEVANT.setInt(1, zLimit);
+			
+			//Run the query
+			ResultSet rs = SQL_SELECT_RELEVANT.executeQuery();
+			
+			//Could be multiple results
+			while(rs.next()) {
+				
+				//Get the blob of data
+				byte[] txpdata 	= rs.getBytes("txpowdata");
+				
+				//Create MiniData version
+				MiniData minitxp = new MiniData(txpdata);
+				
+				//Convert into a TxPoW..
+				TxPoW txpow = TxPoW.convertMiniDataVersion(minitxp);
+				
+				//Add to our list
+				txpows.add(txpow);
+			}
+			
+		} catch (SQLException e) {
+			MinimaLogger.log(e);
+		}
+		
+		return txpows;
+	}
 
 	public synchronized int getSize() {
 		try {
+			//Make sure..
+			checkOpen();
+			
 			//Run the query
 			ResultSet rs = SQL_TOTAL_TXPOW.executeQuery();
 			
@@ -196,6 +296,10 @@ public class TxPoWSqlDB extends SqlDB {
 
 	public synchronized boolean exists(String zTxPoWID) {
 		try {
+			
+			//Make sure..
+			checkOpen();
+			
 			//Set the params..
 			SQL_EXISTS.clearParameters();
 			SQL_EXISTS.setString(1, zTxPoWID);
@@ -207,7 +311,7 @@ public class TxPoWSqlDB extends SqlDB {
 			return rs.next();
 			
 		} catch (SQLException e) {
-			MinimaLogger.log(e);
+			//MinimaLogger.log(e);
 		}
 		
 		return false;
@@ -217,9 +321,20 @@ public class TxPoWSqlDB extends SqlDB {
 	 * Returns how many rows were deleted
 	 */
 	public synchronized int cleanDB() {
+		return cleanDB(false);
+	}
+	
+	public synchronized int cleanDB(boolean zHard) {
 		try {
+			
+			//Make sure..
+			checkOpen();
+			
 			//Current MAX time..
 			long maxtime = System.currentTimeMillis() - MAX_SQL_MILLI;
+			if(zHard) {
+				maxtime = System.currentTimeMillis() + 100000;
+			}
 			
 			//Set the parameters
 			SQL_DELETE_TXPOW.clearParameters();
@@ -255,7 +370,7 @@ public class TxPoWSqlDB extends SqlDB {
 		
 		String id = txp.getTxPoWID();
 		
-		db.addTxPoW(txp);
+		db.addTxPoW(txp, true);
 		
 //		Runnable rr = new Runnable() {
 //			@Override
@@ -290,6 +405,6 @@ public class TxPoWSqlDB extends SqlDB {
 //		System.out.println("File Size : "+db.getSQLFile().length());
 		
 		//Shutdown..
-		db.saveDB();
+		db.saveDB(false);
 	}
 }

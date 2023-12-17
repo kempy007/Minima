@@ -15,17 +15,25 @@ import org.minima.objects.base.MiniNumber;
 import org.minima.system.Main;
 import org.minima.system.commands.backup.archive;
 import org.minima.system.commands.backup.backup;
+import org.minima.system.commands.backup.mysql;
+import org.minima.system.commands.backup.mysqlcoins;
+import org.minima.system.commands.backup.reset;
 import org.minima.system.commands.backup.restore;
+import org.minima.system.commands.backup.restoresync;
+import org.minima.system.commands.backup.vault;
 import org.minima.system.commands.base.automine;
 import org.minima.system.commands.base.balance;
+import org.minima.system.commands.base.block;
 import org.minima.system.commands.base.burn;
+import org.minima.system.commands.base.checkaddress;
 import org.minima.system.commands.base.coincheck;
 import org.minima.system.commands.base.coinexport;
 import org.minima.system.commands.base.coinimport;
+import org.minima.system.commands.base.coinnotify;
 import org.minima.system.commands.base.cointrack;
 import org.minima.system.commands.base.consolidate;
+import org.minima.system.commands.base.convert;
 import org.minima.system.commands.base.debugflag;
-import org.minima.system.commands.base.file;
 import org.minima.system.commands.base.getaddress;
 import org.minima.system.commands.base.hash;
 import org.minima.system.commands.base.hashtest;
@@ -33,6 +41,7 @@ import org.minima.system.commands.base.healthcheck;
 import org.minima.system.commands.base.incentivecash;
 import org.minima.system.commands.base.logs;
 import org.minima.system.commands.base.magic;
+import org.minima.system.commands.base.maths;
 import org.minima.system.commands.base.mempool;
 import org.minima.system.commands.base.missingcmd;
 import org.minima.system.commands.base.mmrcreate;
@@ -42,42 +51,50 @@ import org.minima.system.commands.base.printmmr;
 import org.minima.system.commands.base.printtree;
 import org.minima.system.commands.base.quit;
 import org.minima.system.commands.base.random;
-import org.minima.system.commands.base.send;
-import org.minima.system.commands.base.sendpoll;
+import org.minima.system.commands.base.slavenode;
 import org.minima.system.commands.base.status;
 import org.minima.system.commands.base.test;
 import org.minima.system.commands.base.tokencreate;
 import org.minima.system.commands.base.tokenvalidate;
 import org.minima.system.commands.base.trace;
-import org.minima.system.commands.base.tutorial;
-import org.minima.system.commands.base.vault;
 import org.minima.system.commands.maxima.maxcontacts;
+import org.minima.system.commands.maxima.maxcreate;
+import org.minima.system.commands.maxima.maxextra;
 import org.minima.system.commands.maxima.maxima;
 import org.minima.system.commands.maxima.maxsign;
 import org.minima.system.commands.maxima.maxverify;
+import org.minima.system.commands.mds.checkmode;
+import org.minima.system.commands.mds.checkpending;
+import org.minima.system.commands.mds.checkrestore;
 import org.minima.system.commands.mds.mds;
 import org.minima.system.commands.network.connect;
 import org.minima.system.commands.network.disconnect;
 import org.minima.system.commands.network.message;
 import org.minima.system.commands.network.network;
-import org.minima.system.commands.network.nodecount;
 import org.minima.system.commands.network.p2pstate;
 import org.minima.system.commands.network.peers;
 import org.minima.system.commands.network.ping;
 import org.minima.system.commands.network.rpc;
 import org.minima.system.commands.network.webhooks;
 import org.minima.system.commands.scripts.newscript;
+import org.minima.system.commands.scripts.removescript;
 import org.minima.system.commands.scripts.runscript;
 import org.minima.system.commands.scripts.scripts;
 import org.minima.system.commands.search.coins;
+import org.minima.system.commands.search.history;
 import org.minima.system.commands.search.keys;
 import org.minima.system.commands.search.tokens;
 import org.minima.system.commands.search.txpow;
+import org.minima.system.commands.send.multisig;
+import org.minima.system.commands.send.send;
 import org.minima.system.commands.send.sendnosign;
+import org.minima.system.commands.send.sendpoll;
 import org.minima.system.commands.send.sendpost;
 import org.minima.system.commands.send.sendsign;
+import org.minima.system.commands.send.sendview;
 import org.minima.system.commands.signatures.sign;
 import org.minima.system.commands.signatures.verify;
+import org.minima.system.commands.txn.txnaddamount;
 import org.minima.system.commands.txn.txnauto;
 import org.minima.system.commands.txn.txnbasics;
 import org.minima.system.commands.txn.txncheck;
@@ -88,6 +105,7 @@ import org.minima.system.commands.txn.txnexport;
 import org.minima.system.commands.txn.txnimport;
 import org.minima.system.commands.txn.txninput;
 import org.minima.system.commands.txn.txnlist;
+import org.minima.system.commands.txn.txnlock;
 import org.minima.system.commands.txn.txnoutput;
 import org.minima.system.commands.txn.txnpost;
 import org.minima.system.commands.txn.txnscript;
@@ -105,30 +123,31 @@ public abstract class Command {
 		{   new quit(), new status(), new coins(), new txpow(), new connect(), new disconnect(), new network(),
 			new message(), new trace(), new help(), new printtree(), new automine(), new printmmr(), new rpc(),
 			new send(), new balance(), new tokencreate(), new tokenvalidate(), new tokens(),new getaddress(), new newaddress(), new debugflag(),
-			new incentivecash(), new webhooks(), new peers(), new p2pstate(), new nodecount(),
+			new incentivecash(), new webhooks(), new peers(), new p2pstate(),
 
-			//Removed code..
-//			new sshtunnel(), 
+			new mds(), new sendpoll(), new healthcheck(), new mempool(), new block(), new reset(),
 			
-			new mds(), new sendpoll(), new healthcheck(), new mempool(),
+			new whitepaper(), new sendnosign(), new sendsign(), new sendpost(), new sendview(),
 			
-			new sendsign(), new sendnosign(), new sendpost(),
-			new magic(),
+			new archive(), new logs(), new history(), new convert(),new maths(),
+			new checkpending(), new checkmode(), new restoresync(),
+			//new magic(), 
+			new multisig(), new checkaddress(),
+			new maxsign(), new maxverify(), new maxextra(), new maxcreate(),
 			
-			new maxsign(), new maxverify(),
-			new archive(), new logs(),
+			new ping(), new random(), new mysql(), new mysqlcoins(), new slavenode(), new checkrestore(),
+			//new file(),
 			
-			new ping(), new random(),new file(),
-			
-			new vault(), new consolidate(),
+			new vault(), new consolidate(), new coinnotify(),
 			new backup(), new restore(), new test(), 
 			new runscript(), new tutorial(),new keys(),
-			new scripts(), new newscript(),
+			new scripts(), new newscript(), new removescript(),
 			new burn(),
 			
 			new txnbasics(),new txncreate(), new txninput(),new txnlist(), new txnclear(),
 			new txnoutput(),new txnstate(),new txnsign(),new txnpost(),new txndelete(),
 			new txnexport(),new txnimport(),new txncheck(), new txnscript(), new txnauto(),
+			new txnaddamount(),new txnlock(),
 			
 			new coinimport(), new coinexport(),new cointrack(), new coincheck(),
 			
@@ -145,9 +164,19 @@ public abstract class Command {
 	
 	String mCompleteCommand = new String("");
 	
+	String mMiniDAPPID = "";
+	
 	public Command(String zName, String zHelp) {
 		mName = zName;
 		mHelp = zHelp;
+	}
+	
+	public void setMiniDAPPID(String zMiniDAPPID) {
+		mMiniDAPPID = zMiniDAPPID;
+	}
+	
+	public String getMiniDAPPID() {
+		return mMiniDAPPID;
 	}
 	
 	public void setCompleteCommand(String zCommand) {
@@ -202,12 +231,26 @@ public abstract class Command {
 			throw new CommandException("param not specified : "+zParamName);
 		}
 		
-		return (String) mParams.get(zParamName);
+		//Check for blank
+		String pp = (String)mParams.get(zParamName);
+		pp = pp.trim();
+		if(pp.equals("")) {
+			throw new CommandException("BLANK param not allowed : "+zParamName);
+		}
+		
+		return pp;
 	}
 	
-	public String getParam(String zParamName, String zDefault) {
+	public String getParam(String zParamName, String zDefault) throws CommandException {
 		if(existsParam(zParamName)) {
-			return (String) mParams.get(zParamName);
+			//Check for blank
+			String pp = (String)mParams.get(zParamName);
+			pp = pp.trim();
+			if(pp.equals("")) {
+				throw new CommandException("BLANK param not allowed : "+zParamName);
+			}
+			
+			return pp;
 		}
 		
 		return zDefault;
@@ -289,6 +332,16 @@ public abstract class Command {
 			}
 		}
 		
+		//If it's an 0x address check converts to MiniData correctly
+		if(address.startsWith("0x")) {
+			try {
+				MiniData data 	= new MiniData(address);
+				address 		= data.to0xString();
+			}catch(Exception exc) {
+				throw new CommandException(exc.toString());
+			}
+		}
+		
 		return address;
 	}
 	
@@ -336,14 +389,18 @@ public abstract class Command {
 		while(strtok.hasMoreTokens()) {
 			String command = strtok.nextToken().trim();
 			
-			//Run this command..
+			//Get this command..
 			Command cmd = Command.getCommand(command);
+			
+			//Set who called it
+			cmd.setMiniDAPPID(zMiniDAPPID);
 			
 			//The final result
 			JSONObject result = null;
 			
 			//Check the Parameters
 			ArrayList<String> validparams 	= cmd.getValidParams();
+			
 			JSONObject allparams 			=  cmd.getParams();
 			Set<String> keys 				= allparams.keySet(); 
 			
@@ -388,16 +445,17 @@ public abstract class Command {
 					MiniDAPP md = MinimaDB.getDB().getMDSDB().getMiniDAPP(zMiniDAPPID);
 					
 					//Does it have WRITE permission..
-					if(md.getPermission().equals("read")) {
+					if(!md.getPermission().equalsIgnoreCase("write")) {
 					
 						//Add to pending..
-						Main.getInstance().getMDSManager().addPendingCommand(md, command);
+						String puid = Main.getInstance().getMDSManager().addPendingCommand(md, command);
 						
 						//And return..
 						result=  new JSONObject();
 						result.put("command", command);
 						result.put("status", false);
 						result.put("pending", true);
+						result.put("pendinguid", puid);
 						result.put("error", "This command needs to be confirmed and is now pending..");
 						
 						//Add to the List..
@@ -423,7 +481,7 @@ public abstract class Command {
 				
 				result = cmd.getJSONReply();
 				result.put("status", false);
-				result.put("error", exc.getMessage());
+				result.put("error", exc.toString());
 			}
 			
 			//Add it..
@@ -488,7 +546,6 @@ public abstract class Command {
 				return new missingcmd(command,"Invalid parameters for "+command+" @ "+token);
 			}
 			
-			
 			String name  = token.substring(0, index).trim();
 			String value = token.substring(index+1).trim();
 			
@@ -508,20 +565,20 @@ public abstract class Command {
 			
 			}else if(value.startsWith("[") && value.endsWith("]")) {
 				
+				//Is this a state variable
+				if(command.equals("txnstate")) {
+
+					//Could be a String variable.. add normal String parameter to..
+					comms.getParams().put(name, value);
+
+					continue;
+				}
+				
 				//It's a JSONArray..!
 				JSONArray json = null;
 				try {
 					json = (JSONArray) new JSONParser().parse(value);
 				} catch (ParseException e) {
-					
-					//Is this a state variable
-					if(command.equals("txnstate")) {
-						
-						//Could be a String variable.. add normal String parameter to..
-						comms.getParams().put(name, value);
-						
-						continue;
-					}
 					
 					//Otherwise is just a broken JSONArray
 					return new missingcmd(command,"Invalid JSON parameter for "+command+" @ "+token+" "+e.toString());
@@ -553,8 +610,12 @@ public abstract class Command {
 		
 		//Are there any JSON in this.. if not use super fast method..
 		if(!zForceNormal) {
+			
+			//Check for windows files.. as : screws up
+			boolean iswindowsfile = (zInput.indexOf(":\\")!=-1);
+			
 			//If it's big use the fast one.. but can have issues if : used weirdly.. :( 
-			if(zInput.indexOf("{") == -1 && zInput.indexOf("[") == -1) {
+			if(!iswindowsfile && zInput.indexOf("{") == -1 && zInput.indexOf("[") == -1) {
 				String[] fastres = splitterQuotedPattern(zInput);
 				if(fastres != null) {
 					return fastres;
@@ -704,10 +765,12 @@ public abstract class Command {
 	}
 	
 	/**
-	 * Which Commands are allowed..
+	 * Which Commands are WRITE commands..
 	 */
 	private static final String[] ALL_WRITE_COMMANDS = 
-		{"send","sendpoll","tokencreate","consolidate","cointrack","sign","txnsign","mds","backup","restore","vault","archive"};
+		{"send","sendpoll","sendsign","multisig","tokencreate","consolidate",
+		 "cointrack","sign","txnsign","mds","backup","removescript",
+		 "restore","restoresync","vault","archive","mysql","rpc","magic"};
 	
 	private static final ArrayList<String> ALL_WRITE_COMMANDS_ARRAY = new ArrayList<String>(Arrays.asList(ALL_WRITE_COMMANDS));
 	

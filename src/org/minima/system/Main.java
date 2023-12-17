@@ -5,6 +5,7 @@ import java.util.ArrayList;
 
 import org.minima.database.MinimaDB;
 import org.minima.database.txpowtree.TxPoWTreeNode;
+import org.minima.database.userprefs.UserDB;
 import org.minima.database.wallet.ScriptRow;
 import org.minima.objects.Pulse;
 import org.minima.objects.TxBlock;
@@ -21,13 +22,13 @@ import org.minima.system.network.NetworkManager;
 import org.minima.system.network.maxima.MaximaManager;
 import org.minima.system.network.minima.NIOManager;
 import org.minima.system.network.minima.NIOMessage;
+import org.minima.system.network.p2p.P2PFunctions;
+import org.minima.system.network.webhooks.NotifyManager;
 import org.minima.system.params.GeneralParams;
 import org.minima.system.params.GlobalParams;
 import org.minima.system.sendpoll.SendPollManager;
-import org.minima.utils.BIP39;
 import org.minima.utils.MiniFile;
 import org.minima.utils.MinimaLogger;
-import org.minima.utils.RPCClient;
 import org.minima.utils.json.JSONArray;
 import org.minima.utils.json.JSONObject;
 import org.minima.utils.messages.Message;
@@ -39,6 +40,14 @@ import org.minima.utils.ssl.SSLManager;
 
 public class Main extends MessageProcessor {
 
+	public static boolean STARTUP_DEBUG_LOGS = false;
+	
+	/**
+	 * ERROR on Startup
+	 */
+	public boolean 	STARTUP_ERROR 		= false; 
+	public String 	STARTUP_ERROR_MSG 	= "";
+	
 	/**
 	 * Uptime for the node
 	 */
@@ -64,6 +73,11 @@ public class Main extends MessageProcessor {
 	}
 	
 	/**
+	 * Have we told listener to shutdown..
+	 */
+	private boolean mShutDownSentToListener = false;
+	
+	/**
 	 * Main loop messages
 	 */
 	public static final String MAIN_TXPOWMINED 	= "MAIN_TXPOWMINED";
@@ -77,6 +91,12 @@ public class Main extends MessageProcessor {
 	
 	public static final String MAIN_CLEANDB_SQL 	= "MAIN_CLEANDB_SQL";
 	long CLEANDB_SQL_TIMER	= 1000 * 60 * 60 * 12;
+	
+	public static final String MAIN_SYSTEMCLEAN 	= "MAIN_SYSTEMCLEAN";
+	long SYSTEMCLEAN_TIMER	= 1000 * 60 * 5;
+	
+	public static final String MAIN_AUTOBACKUP_MYSQL 	= "MAIN_AUTOBACKUP_MYSQL";
+	long MAIN_AUTOBACKUP_MYSQL_TIMER					= 1000 * 60 * 60 * 2;
 	
 	/**
 	 * Auto backup every 24 hrs..
@@ -104,6 +124,12 @@ public class Main extends MessageProcessor {
 	MiniData mOldTip 							= MiniData.ZERO_TXPOWID;
 	
 	/**
+	 * Create all the initial Keys
+	 */
+	public static final String MAIN_INIT_KEYS 	= "MAIN_INIT_KEYS";
+	long INIT_KEYS_TIMER = 1000 * 10;
+	
+	/**
 	 * Main loop to check various values every 180 seconds..
 	 */
 	long CHECKER_TIMER							= 1000 * 180;
@@ -115,13 +141,14 @@ public class Main extends MessageProcessor {
 	public static final String MAIN_BALANCE 	= "MAIN_BALANCE";
 	public static final String MAIN_MINING 		= "MAIN_MINING";
 	
+	public static final String MAIN_NEWCOIN 			= "NEWCOIN";
+	public static final String MAIN_NOTIFYCOIN 			= "NOTIFYCOIN";
+	public static final String MAIN_NOTIFYCASCADECOIN 	= "NOTIFYCASCADECOIN";
+	
 	/**
-	 * Incentive Cash User ping..
-	 * 
-	 * Every 8 hours
+	 * Are we on Normal mine mode or LOW
 	 */
-	public static final String MAIN_INCENTIVE 	= "MAIN_INCENTIVE";
-	long IC_TIMER = 1000 * 60 * 60 * 8;
+	boolean mNormalMineMode = true;
 	
 	/**
 	 * Main TxPoW Processor
@@ -154,14 +181,24 @@ public class Main extends MessageProcessor {
 	SendPollManager mSendPoll;
 	
 	/**
+	 * The Web Hooks for Minima messages
+	 */
+	NotifyManager mNotifyManager;
+	
+	/**
 	 * Are we shutting down..
 	 */
-	boolean mShuttingdown = false;
-	
+	boolean mShuttingdown 				= false;
+	boolean mHaveShutDownMDS 			= false;
 	/**
 	 * Are we restoring..
 	 */
 	boolean mRestoring = false;
+	
+	/**
+	 * Are we syncing an IBD
+	 */
+	boolean mSyncIBD = false;
 	
 	/**
 	 * Timer for the automine message
@@ -176,6 +213,10 @@ public class Main extends MessageProcessor {
 	public Main() {
 		super("MAIN");
 	
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("MAIN init.. start");
+		}
+		
 		//Start the Uptime clock..
 		mUptimeMilli = System.currentTimeMillis();
 		
@@ -185,6 +226,25 @@ public class Main extends MessageProcessor {
 		//Create the timer processor
 		TimerProcessor.createTimerProcessor();
 		
+		//Are we running a PRIVATE network..
+		if(GeneralParams.PRIVATE) {
+			
+			//Get the base folder
+			File basefolder = new File(GeneralParams.DATA_FOLDER,"databases");
+			
+			//Is this the first run.. Check if files exist..
+			File userdb = new File(basefolder, "userprefs.db");
+			if(userdb.exists() && !GeneralParams.CLEAN) {
+				//This is not the first run..
+				MinimaLogger.log("SOLO NETWORK : userdb found : not first run.. no -genesis..");
+				
+			}else {
+				MinimaLogger.log("SOLO NETWORK : userdb not found : FIRST RUN.. creating genesis coins..");
+				GeneralParams.CLEAN 	= true;
+                GeneralParams.GENESIS 	= true;
+			}
+		}
+		
 		//Are we deleting previous..
 		if(GeneralParams.CLEAN) {
 			MinimaLogger.log("Wiping previous config files..");
@@ -193,43 +253,52 @@ public class Main extends MessageProcessor {
 		}
 		
 		//Create the MinmaDB
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("MinimaDB create.. start");
+		}
 		MinimaDB.createDB();
-		
-		//Load the Databases
-		MinimaDB.getDB().loadAllDB();
-		
-		//Create the SSL Keystore..
-		SSLManager.makeKeyFile();
-		
-		//Set the Base Private seed if needed..
-		if(MinimaDB.getDB().getUserDB().getBasePrivateSeed().equals("")) {
-			MinimaLogger.log("Generating Base Private Seed Key");
-			
-			//Get a BIP39 phrase
-			String[] words = BIP39.getNewWordList();
-			
-			//Convert to a string
-			String phrase = BIP39.convertWordListToString(words);
-			
-			//Convert that into a seed..
-			MiniData seed = BIP39.convertStringToSeed(phrase);
-			
-			//Not set yet..
-			MinimaDB.getDB().getUserDB().setBasePrivatePhrase(phrase);
-			MinimaDB.getDB().getUserDB().setBasePrivateSeed(seed.to0xString());
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("MinimaDB create.. finish");
 		}
 		
-		//Get the base private seed..
-		String basepriv = MinimaDB.getDB().getUserDB().getBasePrivateSeed();
-		MinimaDB.getDB().getWallet().initBaseSeed(new MiniData(basepriv));
+		//Load the Databases
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("Load all DB.. start");
+		}
+		MinimaDB.getDB().loadAllDB();
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("Load all DB.. finish");
+		}
 		
+		//Are we in Slave node mode
+		boolean slavemode = MinimaDB.getDB().getUserDB().isSlaveNode();
+		if(slavemode) {
+			GeneralParams.CONNECT_LIST 			= MinimaDB.getDB().getUserDB().getSlaveNodeHost();
+        	GeneralParams.P2P_ENABLED 			= false;
+            GeneralParams.TXBLOCK_NODE 			= true;
+            GeneralParams.NO_SYNC_IBD 			= true;
+            GeneralParams.IS_ACCEPTING_IN_LINKS = false;
+            MinimaLogger.log("Slave Mode ENABLED master:"+GeneralParams.CONNECT_LIST);
+		}
+		
+		//Create the SSL Keystore..
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("SSL Key.. start");
+		}
+		SSLManager.makeKeyFile();
+		if(STARTUP_DEBUG_LOGS) {
+			MinimaLogger.log("SSL Key.. finish");
+		}
 		//Calculate the User hashrate.. start her up as seems to make a difference.. initialises..
-		TxPoWMiner.calculateHashRate(new MiniNumber(10000));
+		TxPoWMiner.calculateHashRateOld(new MiniNumber(10000));
+		
+		//Delete the Archive restore folder - if it exists..
+		File restorefolder = new File(GeneralParams.DATA_FOLDER,"archiverestore");
+		MiniFile.deleteFileOrFolder(GeneralParams.DATA_FOLDER, restorefolder);
 		
 		//Now do the actual check..
-		MiniNumber hashcheck = new MiniNumber("250000");
-		MiniNumber hashrate_old = TxPoWMiner.calculateHashRate(hashcheck);
-		MiniNumber hashrate = TxPoWMiner.calculateHashSpeed(hashcheck);
+		MiniNumber hashcheck 	= new MiniNumber("250000");
+		MiniNumber hashrate 	= TxPoWMiner.calculateHashSpeed(hashcheck);
 		MinimaDB.getDB().getUserDB().setHashRate(hashrate);
 		MinimaLogger.log("Calculate device hash rate : "+hashrate.div(MiniNumber.MILLION).setSignificantDigits(4)+" MHs");
 		
@@ -240,22 +309,43 @@ public class Main extends MessageProcessor {
 			MinimaLogger.log(exc.toString());
 		}
 		
+		//Notification of Events
+		mNotifyManager = new NotifyManager();
+				
 		//Start the engine..
 		mTxPoWProcessor = new TxPoWProcessor();
+		
+		//Create the TxpowMiner
 		mTxPoWMiner 	= new TxPoWMiner();
+				
+		//Recalc Tree if too large
+		try {
+			if(MinimaDB.getDB().getTxPoWTree().getHeaviestBranchLength() > 1200) {
+				MinimaLogger.log("Large tree.. recalculating..");
+				mTxPoWProcessor.onStartUpRecalc();
+				
+				//For now..
+				MinimaDB.getDB().saveState();
+				
+				//Clean..
+				System.gc();
+			}	
+		}catch(Exception exc) {
+			MinimaLogger.log(exc);
+		}
 		
 		//Are we running a private network
 		if(GeneralParams.GENESIS) {
 			//Create a genesis node
 			doGenesis();
 		}
-		
+				
 		//Start the networking..
 		mNetwork = new NetworkManager();
-		
+				
 		//Start up Maxima
 		mMaxima = new MaximaManager();
-		
+				
 		//Start MDS
 		mMDS = new MDSManager();
 		
@@ -274,24 +364,56 @@ public class Main extends MessageProcessor {
 			//Do sooner as stores the genesis Txn..
 			PostTimerMessage(new TimerMessage(10 * 1000, MAIN_CLEANDB_RAM));
 		}else {
-			PostTimerMessage(new TimerMessage(60 * 1000, MAIN_CLEANDB_RAM));
+			PostTimerMessage(new TimerMessage(3 * 60 * 1000, MAIN_CLEANDB_RAM));
 		}
-		PostTimerMessage(new TimerMessage(60 * 1000, MAIN_CLEANDB_SQL));
+		PostTimerMessage(new TimerMessage(10 * 60 * 1000, MAIN_CLEANDB_SQL));
 		
-		//Store the IC User - do fast first time - 30 seconds in.. then every 8 hours
-		PostTimerMessage(new TimerMessage(1000*30, MAIN_INCENTIVE));
+		//System Clean..
+		PostTimerMessage(new TimerMessage(SYSTEMCLEAN_TIMER, MAIN_SYSTEMCLEAN));
 		
 		//Debug Checker
 		PostTimerMessage(new TimerMessage(CHECKER_TIMER, MAIN_CHECKER));
 		
+		//Init Keys
+		PostTimerMessage(new TimerMessage(1000 * 30, MAIN_INIT_KEYS));
+				
 		//Reset Network stats every 24 hours
 		PostTimerMessage(new TimerMessage(NETRESET_TIMER, MAIN_NETRESET));
 		
-		//AutoBackup - do one in 10 minutes then every 24 hours
-		PostTimerMessage(new TimerMessage(1000 * 60 * 10, MAIN_AUTOBACKUP));
+		//AutoBackup - do one in 5 minutes then every 24 hours
+		PostTimerMessage(new TimerMessage(1000 * 60 * 5, MAIN_AUTOBACKUP));
 		
+		//MYSQL AutoBackup - do one in 5 minutes then every 2 hours
+		PostTimerMessage(new TimerMessage(1000 * 60 * 5, MAIN_AUTOBACKUP_MYSQL));
+				
 		//Quick Clean up..
 		System.gc();
+		
+		//Check slavenode status
+		if(GeneralParams.TXBLOCK_NODE) {
+			
+			if(GeneralParams.CONNECT_LIST.indexOf(",")!=-1) {
+				//Can only connect to 1 host
+				MinimaLogger.log("[!] Can ONLY connect to 1 host in slave mode.. stopping");
+				Runtime.getRuntime().exit(1);
+			}
+			
+			MinimaLogger.log("Running in slave mode. Will Connect to "+GeneralParams.CONNECT_LIST);
+		}
+	}
+	
+	/**
+	 * Are we syncing an IBD
+	 */
+	public void setSyncIBD(boolean zSync) {
+		if(GeneralParams.IBDSYNC_LOGS) {
+			MinimaLogger.log("SYNC IBD LOCK : "+zSync);
+		}
+		mSyncIBD = zSync;
+	}
+	
+	public boolean isSyncIBD() {
+		return mSyncIBD;
 	}
 	
 	/**
@@ -309,13 +431,26 @@ public class Main extends MessageProcessor {
 		return mRestoring;
 	}
 	
+	public boolean isShuttongDownOrRestoring() {
+		return mShuttingdown || mRestoring;
+	}
+	
 	public void shutdown() {
+		shutdown(false);
+	}
+	
+	public void shutdown(boolean zCompact) {
 		//Are we already shutting down..
 		if(mShuttingdown) {
+			MinimaLogger.log("Shutdown called when already shutting down..");
 			return;
 		}
 		
-		MinimaLogger.log("Shut down started..");
+		if(zCompact) {
+			MinimaLogger.log("Shut down started.. Compacting All Databases");
+		}else {
+			MinimaLogger.log("Shut down started..");
+		}
 		
 		//we are shutting down
 		mShuttingdown = true;
@@ -329,22 +464,23 @@ public class Main extends MessageProcessor {
 			shutdownGenProcs();
 			
 			//Stop the main TxPoW processor
-			MinimaLogger.log("Waiting for TxPoWProcessor shutdown");
-			mTxPoWProcessor.stopMessageProcessor();
-			mTxPoWProcessor.waitToShutDown(false);
+			shutdownFinalProcs();
 			
 			//Now backup the  databases
 			MinimaLogger.log("Saving all db");
-			MinimaDB.getDB().saveAllDB();
+			MinimaDB.getDB().saveAllDB(zCompact);
 					
 			//Stop this..
 			stopMessageProcessor();
 			
 			//Wait for it..
-			MinimaLogger.log("Waiting for Main thread shutdown");
-			waitToShutDown(true);
-		
+			MinimaLogger.log("Main thread shutdown");
+			waitToShutDown();
+			
 			MinimaLogger.log("Shut down completed OK..");
+			
+			//Tell listener..
+			NotifyMainListenerOfShutDown();
 			
 		}catch(Exception exc) {
 			MinimaLogger.log("ERROR Shutting down..");
@@ -352,7 +488,51 @@ public class Main extends MessageProcessor {
 		}
 	}
 	
+	public static void ClearMainInstance() {
+		//NULL main instance..
+		if(mMainInstance != null) {
+			mMainInstance = null;
+			MinimaLogger.log("Main Instance Cleared..");
+		}
+	}
+	
+	public void NotifyMainListenerOfShutDown() {
+		
+		//Called from various functions
+		ClearMainInstance();
+		
+		//Have we done this already
+		if(mShutDownSentToListener) {
+			return;
+		}
+		mShutDownSentToListener = true;
+		
+		//Send them a message
+		try {
+			NotifyMainListenerOnly("SHUTDOWN");
+		} catch (Exception e) {
+			MinimaLogger.log(e);
+		}
+	}
+	
+	public void setStartUpError(boolean zStartError, String zMessage) {
+		STARTUP_ERROR 		= zStartError;
+		STARTUP_ERROR_MSG 	= zMessage;
+	}
+	
+	public boolean isStartupError() {
+		return STARTUP_ERROR;
+	}
+	
+	public String getStartupErrorMsg() {
+		return STARTUP_ERROR_MSG;
+	}
+	
 	public void restoreReady() {
+		restoreReady(true);
+	}
+	
+	public void restoreReady(boolean zShutdownMDS) {
 		//we are about to restore..
 		mRestoring = true;
 		
@@ -360,11 +540,23 @@ public class Main extends MessageProcessor {
 		shutdownGenProcs();
 		
 		//Stop the main TxPoW processor
-		mTxPoWProcessor.stopMessageProcessor();
-		mTxPoWProcessor.waitToShutDown(false);	
+		shutdownFinalProcs(zShutdownMDS);
+	}
+	
+	public void restoreReadyForSync() {
+		
+		//Restart the Processor
+		mTxPoWProcessor = new TxPoWProcessor();
+		
+		//Reload the DBs..
+		MinimaDB.getDB().loadDBsForRestoreSync();
 	}
 	
 	public void archiveResetReady(boolean zResetWallet) {
+		archiveResetReady(zResetWallet, true);
+	}
+	
+	public void archiveResetReady(boolean zResetWallet, boolean zResetCascadeTree) {
 		//we are about to restore..
 		mRestoring = true;
 				
@@ -372,23 +564,27 @@ public class Main extends MessageProcessor {
 		shutdownGenProcs();
 		
 		//Delete old files.. and reset to new
-		MinimaDB.getDB().getTxPoWDB().getSQLDB().saveDB();
-		MinimaDB.getDB().getTxPoWDB().getSQLDB().getSQLFile().delete();
+		MinimaDB.getDB().getTxPoWDB().getSQLDB().saveDB(false);
+		if(zResetCascadeTree) {
+			MinimaDB.getDB().getTxPoWDB().getSQLDB().getSQLFile().delete();
+		}
 		
-		MinimaDB.getDB().getArchive().saveDB();
+		MinimaDB.getDB().getArchive().saveDB(false);
 		MinimaDB.getDB().getArchive().getSQLFile().delete();
 		
 		//Are we deleting the wallet..
 		if(zResetWallet) {
-			MinimaDB.getDB().getWallet().saveDB();
+			MinimaDB.getDB().getWallet().saveDB(false);
 			MinimaDB.getDB().getWallet().getSQLFile().delete();
 		}
 		
 		//Reload the SQL dbs
 		MinimaDB.getDB().loadArchiveAndTxPoWDB(zResetWallet);
 		
-		//Reset these 
-		MinimaDB.getDB().resetCascadeAndTxPoWTree();
+		if(zResetCascadeTree) {
+			//Reset these 
+			MinimaDB.getDB().resetCascadeAndTxPoWTree();
+		}
 	}
 	
 	private void shutdownGenProcs() {
@@ -401,9 +597,6 @@ public class Main extends MessageProcessor {
 		
 		//Shut down Maxima
 		mMaxima.shutdown();
-		
-		//ShutDown MDS
-		mMDS.shutdown();
 				
 		//Stop the Miner
 		mTxPoWMiner.stopMessageProcessor();
@@ -421,6 +614,54 @@ public class Main extends MessageProcessor {
 				break;
 			}
 		}
+	}
+	
+	public void shutdownFinalProcs() {
+		shutdownFinalProcs(true);
+	}
+	
+	public void shutdownFinalProcs(boolean zShutDownMDS) {
+				
+		if(zShutDownMDS) {
+			if(!mHaveShutDownMDS) {
+				mHaveShutDownMDS = true;
+				shutdownMDS();
+			}
+		}
+				
+		//Stop the main TxPoW processor
+		MinimaLogger.log("Shutdown TxPoWProcessor..");
+		mTxPoWProcessor.stopMessageProcessor();
+		mTxPoWProcessor.waitToShutDown();
+	}
+	
+	public void shutdownMDS() {
+		//ShutDown MDS
+		MinimaLogger.log("Shutdown MDS..");
+		mMDS.shutdown();
+		
+		//Shut down the Notify Manager
+		mNotifyManager.shutDown();
+	}
+	
+	/**
+	 * USed when Syncing to clear memory
+	 */
+	public void resetMemFull() {
+		//MinimaLogger.log("System full memory clean..");
+		
+		//Reset all the DBs..
+		MinimaDB.getDB().fullDBRestartMemFree();
+		
+		//Stop the main TxPoW processor
+		mTxPoWProcessor.stopMessageProcessor();
+		mTxPoWProcessor.waitToShutDown();
+		
+		//Now reset the main processor..
+		mTxPoWProcessor = new TxPoWProcessor();
+		
+		//And system clean 
+		System.gc();
 	}
 	
 	public void restartNIO() {
@@ -468,12 +709,18 @@ public class Main extends MessageProcessor {
 	
 	//Every 50 seconds - the normal blockspeed
 	public void setNormalAutoMineSpeed() {
+		mNormalMineMode = true;
 		AUTOMINE_TIMER = 1000 * 50;
 	}
 	
 	//Every 500 seconds - for Android when not plugged in
 	public void setLowPowAutoMineSpeed() {
+		mNormalMineMode = false;
 		AUTOMINE_TIMER = 1000 * 500;
+	}
+	
+	public boolean isNormalMineMode() {
+		return mNormalMineMode;
 	}
 	
 	public long getUptimeMilli() {
@@ -486,6 +733,10 @@ public class Main extends MessageProcessor {
 	
 	public NIOManager getNIOManager() {
 		return mNetwork.getNIOManager();
+	}
+	
+	public NotifyManager getNotifyManager() {
+		return mNotifyManager;
 	}
 	
 	public TxPoWProcessor getTxPoWProcessor() {
@@ -532,6 +783,14 @@ public class Main extends MessageProcessor {
 		MinimaDB.getDB().getTxPoWDB().setOnMainChain(genesis.getTxPoWID());
 	}
 	
+	public boolean getAllKeysCreated() {
+		return mInitKeysCreated;
+	}
+	
+	public int getAllDefaultKeysSize() {
+		return MinimaDB.getDB().getWallet().getDefaultKeysNumber();
+	}
+	
 	@Override
 	protected void processMessage(Message zMessage) throws Exception {
 		//Are we shutting down
@@ -565,10 +824,18 @@ public class Main extends MessageProcessor {
 			//Post to the NIOManager - which will check it and forward if correct
 			getNetworkManager().getNIOManager().PostMessage(newniomsg);
 			
-		}else if(zMessage.getMessageType().equals(MAIN_CLEANDB_RAM)) {
+		}else if(zMessage.getMessageType().equals(MAIN_SYSTEMCLEAN)) {
+			
+			//Do it again..
+			PostTimerMessage(new TimerMessage(SYSTEMCLEAN_TIMER, MAIN_SYSTEMCLEAN));
 			
 			//Clean up the RAM Memory
 			System.gc();
+			
+		}else if(zMessage.getMessageType().equals(MAIN_CLEANDB_RAM)) {
+			
+			//Do it again..
+			PostTimerMessage(new TimerMessage(CLEANDB_RAM_TIMER, MAIN_CLEANDB_RAM));
 			
 			//Do some house keeping on the DB
 			MinimaDB.getDB().getTxPoWDB().cleanDBRAM();
@@ -576,44 +843,65 @@ public class Main extends MessageProcessor {
 			//Now save the state - in case system crashed..
 			MinimaDB.getDB().saveState();
 			
+			//Clear the Maxima Poll Stack
+			getMaxima().checkPollMessages();
+			
+		}else if(zMessage.getMessageType().equals(MAIN_AUTOBACKUP_MYSQL)) {
+			
 			//Do it again..
-			PostTimerMessage(new TimerMessage(CLEANDB_RAM_TIMER, MAIN_CLEANDB_RAM));
-		
+			PostTimerMessage(new TimerMessage(MAIN_AUTOBACKUP_MYSQL_TIMER, MAIN_AUTOBACKUP_MYSQL));
+			
+			UserDB udb = MinimaDB.getDB().getUserDB();
+			
+			//Are we enabled..
+			if(udb.getAutoBackupMySQL()) {
+				
+				String backupcommand = "mysql host:"+udb.getAutoMySQLHost()
+								+" database:"+udb.getAutoMySQLDB()
+								+" user:"+udb.getAutoMySQLUser()
+								+" password:"+udb.getAutoMySQLPassword()
+								+" action:update";
+				
+				//Run a mysql Backup of the archive data..
+				JSONArray res 	= Command.runMultiCommand(backupcommand);
+				JSONObject json = (JSONObject) res.get(0); 
+				boolean status  = (boolean) json.get("status");
+				
+				//Output
+				if(!status) {
+					MinimaLogger.log("[ERROR] MYSQL AUTOBACKUP "+json.getString("error"));
+				}else {
+					JSONObject response = (JSONObject) json.get("response");
+					MinimaLogger.log("MYSQL AUTOBACKUP OK "+response.toString());
+				}
+			}
+			
 		}else if(zMessage.getMessageType().equals(MAIN_CLEANDB_SQL)) {
-			
-			//Do some house keeping on the DB
-			MinimaDB.getDB().getTxPoWDB().cleanDBSQL();
-			
-			//Same with the ArchiveDB
-			MinimaDB.getDB().getArchive().cleanDB();
 			
 			//Do it again..
 			PostTimerMessage(new TimerMessage(CLEANDB_SQL_TIMER, MAIN_CLEANDB_SQL));
 			
+			//Do some house keeping on the DB
+			MinimaDB.getDB().getTxPoWDB().cleanDBSQL();
+			
+			//Same with the ArchiveDB - if not running an archive node
+			MinimaDB.getDB().getArchive().checkForCleanDB();
+			
 		}else if(zMessage.getMessageType().equals(MAIN_PULSE)) {
+			
+			//And then wait again..
+			PostTimerMessage(new TimerMessage(GeneralParams.USER_PULSE_FREQ, MAIN_PULSE));
+			
+			//Are we a Slavenode - have no transactions.. use TXBLOCKMINE msg instead
+			if(GeneralParams.TXBLOCK_NODE) {
+				return;
+			}
 			
 			//Create Pulse Message
 			Pulse pulse = Pulse.createPulse();
 		
 			//And send it to all your peers..
 			NIOManager.sendNetworkMessageAll(NIOMessage.MSG_PULSE, pulse);
-			
-			//And then wait again..
-			PostTimerMessage(new TimerMessage(GeneralParams.USER_PULSE_FREQ, MAIN_PULSE));
-		
-		}else if(zMessage.getMessageType().equals(MAIN_INCENTIVE)) {
-			
-			//Do it agin..
-			PostTimerMessage(new TimerMessage(IC_TIMER, MAIN_INCENTIVE));
-			
-			//Get the User
-			String user = MinimaDB.getDB().getUserDB().getIncentiveCashUserID();
-			
-			//Make sure there is a User specified
-			if(!user.equals("")) {
-				//Call the RPC End point..
-				RPCClient.sendPUT("https://incentivecash.minima.global/api/ping/"+user+"?version="+GlobalParams.MINIMA_VERSION);
-			}
 			
 		}else if(zMessage.getMessageType().equals(MAIN_NEWBLOCK)) {
 			
@@ -655,6 +943,9 @@ public class Main extends MessageProcessor {
 
 		}else if(zMessage.getMessageType().equals(MAIN_AUTOBACKUP)) {
 			
+			//And Again..
+			PostTimerMessage(new TimerMessage(AUTOBACKUP_TIMER, MAIN_AUTOBACKUP));
+			
 			//Are we backing up..
 			if(MinimaDB.getDB().getUserDB().isAutoBackup()) {
 			
@@ -663,11 +954,16 @@ public class Main extends MessageProcessor {
 				
 				//Output
 				MinimaLogger.log("AUTOBACKUP : "+res.toString());
-			
 			}
 			
-			//And Again..
-			PostTimerMessage(new TimerMessage(AUTOBACKUP_TIMER, MAIN_AUTOBACKUP));
+			//Clear the Invalid Peers
+			P2PFunctions.clearInvalidPeers();
+			
+			//Recalculate the hash speed..
+			MiniNumber hashcheck 	= new MiniNumber("250000");
+			MiniNumber hashrate 	= TxPoWMiner.calculateHashSpeed(hashcheck);
+			MinimaDB.getDB().getUserDB().setHashRate(hashrate);
+			MinimaLogger.log("Re-Calculate device hash rate : "+hashrate.div(MiniNumber.MILLION).setSignificantDigits(4)+" MHs");
 			
 		}else if(zMessage.getMessageType().equals(MAIN_NETRESET)) {
 			
@@ -680,16 +976,30 @@ public class Main extends MessageProcessor {
 		}else if(zMessage.getMessageType().equals(MAIN_SHUTDOWN)) {
 			
 			shutdown();
-			
-		}else if(zMessage.getMessageType().equals(MAIN_CHECKER)) {
+		
+		}else if(zMessage.getMessageType().equals(MAIN_INIT_KEYS)) {
 			
 			//Check the Default keys
 			if(!mInitKeysCreated) {
-				mInitKeysCreated = MinimaDB.getDB().getWallet().initDefaultKeys();
-				if(mInitKeysCreated) {
-					MinimaLogger.log("All default getaddress keys created..");
+				try {
+					mInitKeysCreated = MinimaDB.getDB().getWallet().initDefaultKeys(8);
+					if(mInitKeysCreated) {
+						MinimaLogger.log("All default getaddress keys created..");
+					}
+				}catch(Exception exc) {
+					MinimaLogger.log(exc);
 				}
 			}
+			
+			//Check again..
+			if(!mInitKeysCreated) {
+				PostTimerMessage(new TimerMessage(INIT_KEYS_TIMER, MAIN_INIT_KEYS));
+			}
+			
+		}else if(zMessage.getMessageType().equals(MAIN_CHECKER)) {
+			
+			//Check again..
+			PostTimerMessage(new TimerMessage(CHECKER_TIMER, MAIN_CHECKER));
 			
 			//Get the Current Tip
 			TxPoWTreeNode tip = MinimaDB.getDB().getTxPoWTree().getTip();
@@ -708,9 +1018,6 @@ public class Main extends MessageProcessor {
 			
 			//A Ping Message.. The top TxPoWID
 			NIOManager.sendNetworkMessageAll(NIOMessage.MSG_PING, tip.getTxPoW().getTxPoWIDData());
-			
-			//Check again..
-			PostTimerMessage(new TimerMessage(CHECKER_TIMER, MAIN_CHECKER));
 		}
 	}
 	
@@ -718,25 +1025,51 @@ public class Main extends MessageProcessor {
 	 * Post a network message to the webhook / MDS / Android listeners
 	 */
 	public void PostNotifyEvent(String zEvent, JSONObject zData) {
+		PostNotifyEvent(zEvent, zData, "*");
+	}
+	
+	public void PostNotifyEvent(String zEvent, JSONObject zData, String zTo) {
 		
 		//Create the JSON Message
 		JSONObject notify = new JSONObject();
 		notify.put("event", zEvent);
 		notify.put("data", zData);
 		
-		if(getNetworkManager() != null) {
-			//And post
-			getNetworkManager().getNotifyManager().PostEvent(notify);
+		//Post to everyone ?
+		if(zTo.equals("*")) {
+			if(getNotifyManager() != null) {
+				
+				//And post
+				getNotifyManager().PostEvent(notify);
+			}
 		}
 		
 		//Tell the MDS..
 		if(getMDSManager() != null) {
 			Message poll = new Message(MDSManager.MDS_POLLMESSAGE);
 			poll.addObject("poll", notify);
-			poll.addObject("to", "*");
-			
+			poll.addObject("to", zTo);
 			getMDSManager().PostMessage(poll);
 		}
 	}
 	
+	/**
+	 * Send a message ONLY to the LIstener..
+	 */
+	public static void NotifyMainListenerOnly(String zMessage) throws Exception {
+		//Notify
+		if(getMinimaListener() != null) {
+			
+			//Create the JSON Message
+			JSONObject notify = new JSONObject();
+			notify.put("event", zMessage);
+			notify.put("data", new JSONObject());
+			
+			Message msg = new Message(NotifyManager.NOTIFY_POST);
+			msg.addObject("notify", notify);
+			
+			//Notify them that something is happening..
+			getMinimaListener().processMessage(msg);
+		}
+	}
 }

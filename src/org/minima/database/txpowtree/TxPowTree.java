@@ -11,6 +11,7 @@ import java.util.Date;
 import java.util.Hashtable;
 
 import org.minima.database.MinimaDB;
+import org.minima.database.archive.TxBlockDB;
 import org.minima.database.txpowdb.TxPoWDB;
 import org.minima.objects.TxPoW;
 import org.minima.objects.base.MiniData;
@@ -353,11 +354,11 @@ public class TxPowTree implements Streamable {
 	}
 
 	public void loadDB(File zFile) {
-		MiniFile.loadObject(zFile, this);
+		MiniFile.loadObjectSlow(zFile, this);
 	}
 	
 	public void saveDB(File zFile) {
-		MiniFile.saveObject(zFile, this);
+		MiniFile.saveObjectDirect(zFile, this);
 	}
 	
 	@Override
@@ -390,8 +391,9 @@ public class TxPowTree implements Streamable {
 		mFastLink 	= new Hashtable<>();
 		mLength		= 0;
 		
-		//Get the TxPowDB
-		TxPoWDB txpdb =  MinimaDB.getDB().getTxPoWDB();
+		//Get the RequiredDBs
+		TxPoWDB txpdb 	= MinimaDB.getDB().getTxPoWDB();
+		TxBlockDB txbdb = MinimaDB.getDB().getTxBlockDB();
 		
 		int len = MiniNumber.ReadFromStream(zIn).getAsInt();
 		for(int i=0;i<len;i++) {
@@ -403,6 +405,7 @@ public class TxPowTree implements Streamable {
 			
 			//Add the TxPoW to the main TxPoWDB - just SQL not Mempool..
 			txpdb.addSQLTxPoW(node.getTxPoW());
+			txbdb.addTxBlock(node.getTxBlock());
 			
 			//Add it to the tree..
 			if(mRoot == null) {

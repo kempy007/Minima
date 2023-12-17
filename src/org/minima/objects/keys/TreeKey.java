@@ -9,6 +9,14 @@ import org.minima.utils.MinimaLogger;
 
 public class TreeKey {
 
+	/**
+	 * Maximum Levels for any Key allowed
+	 */
+	public static final int MAX_KEY_LEVELS		 = 8;
+	
+	/**
+	 * Default Values
+	 */
 	public static final int DEFAULT_KEYSPERLEVEL = 64;
 	public static final int DEFAULT_LEVELS 		 = 3;
 	
@@ -29,16 +37,18 @@ public class TreeKey {
 	MiniData mPrivateSeed;
 	MiniData mPublicKey;
 	
-	public TreeKey() {
-		super();
-	}
+	public TreeKey() {}
 	
 	public TreeKey(MiniData zPrivateSeed, int zKeyNum, int zLevels) {
-		super();
 		
 		//Levels and Keys
 		mLevels 		= zLevels;
 		mKeysPerLevel 	= zKeyNum;
+		
+		//Check maximum
+		if(mLevels>MAX_KEY_LEVELS) {
+			throw new IllegalArgumentException("Too many key Levels "+mLevels+" MAX:"+MAX_KEY_LEVELS);
+		}
 		
 		mUses			= 0; 
 		mMaxUses 		= (int) Math.pow(mKeysPerLevel, mLevels);
@@ -175,6 +185,11 @@ public class TreeKey {
 		
 		//Cycle through..
 		int total = zSignature.getAllSignatureProofs().size();
+		if(total>MAX_KEY_LEVELS) {
+			MinimaLogger.log("[!] INVALID KEY found with "+total+" levels MAX:"+MAX_KEY_LEVELS);
+			return false;
+		}
+		
 		for(int depth=0;depth<total;depth++) {
 			
 			//Get the signature
@@ -240,12 +255,34 @@ public class TreeKey {
 	
 	public static void main(String[] zArgs) {
 		
+		
+		MiniData priv 	= new MiniData("0x51D9F403271E267229B6C2A95C5EAED527846A1AF89F8B1CF5574B0E79A49CF1");
+		
+		MiniData pub 	= new MiniData("0x61B23ACB575490ACEAC2C4F24A78B1E28AF10D9E209EAA49F2CC75292089551F");
+		
+		TreeKey tester 	= new TreeKey(priv, 64, 3);
+		
+		MiniData pktest = tester.getPublicKey();
+		
+		System.out.println(pktest);
+		
+		
+		
+		
+		
+		
+		
+		if(true) {
+			return;
+		}
+		
 		MiniData seed = new MiniData("0x000102");
 		
 		int maxsigs = 5;
 		
 		long timenow = System.currentTimeMillis();
-		TreeKey kt = new TreeKey(seed, 256, 3);
+		TreeKey kt 	 = new TreeKey(seed, 4, 3);
+//		TreeKey kt 	 = TreeKey.createDefault(seed);
 		long timediff = System.currentTimeMillis() - timenow;
 		System.out.println("time "+timediff);
 		

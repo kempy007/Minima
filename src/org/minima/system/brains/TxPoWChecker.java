@@ -41,6 +41,18 @@ public class TxPoWChecker {
 	public static MiniNumber MAX_TIME_FUTURE = new MiniNumber(1000 * 60 * 60 * 24); 
 	
 	/**
+	 * MAX Time block checker..
+	 */
+	public static boolean checkTxPoWBlockTimed(TxPoWTreeNode zParentNode, TxPoW zTxPoW, ArrayList<TxPoW> zTransactions) {
+		
+		//Create new checker..
+		TimedChecker tc = new TimedChecker();
+		
+		//Run it in a timed environment
+		return tc.checkTxPoWBlock(zParentNode, zTxPoW, zTransactions);
+	}
+	
+	/**
 	 * Parallel check all the transactions in this block
 	 */
 	public static boolean checkTxPoWBlock(TxPoWTreeNode zParentNode, TxPoW zTxPoW, ArrayList<TxPoW> zTransactions) {
@@ -140,7 +152,7 @@ public class TxPoWChecker {
 			
 			//First check this
 			if(zTxPoW.isTransaction()) {
-				boolean valid = checkTxPoWSimple(parentMMR, zTxPoW, zTxPoW);
+				boolean valid = checkTxPoWSimple(parentMMR, zTxPoW, zTxPoW, true);
 				if(!valid) {
 					return false;
 				}
@@ -148,7 +160,7 @@ public class TxPoWChecker {
 			
 			//Now check all the internal Transactions
 			for(TxPoW txpow : zTransactions) {
-				boolean valid = checkTxPoWSimple(parentMMR, txpow, zTxPoW);
+				boolean valid = checkTxPoWSimple(parentMMR, txpow, zTxPoW, true);
 				if(!valid) {
 					return false;
 				}
@@ -167,6 +179,68 @@ public class TxPoWChecker {
 			
 		}catch(Exception exc) {
 			MinimaLogger.log("ERROR checking TxPoW Block..");
+			MinimaLogger.log(exc);
+			
+			return false;
+		}
+		
+		return true;
+	}
+	
+	/**
+	 * Perform some basic checks on this TxBlock
+	 */
+	public static boolean checkTxBlockOnly(TxPoWTreeNode zParentNode, TxBlock zTxBlock) {
+		
+		try {
+			//Get the TxPoW..
+			TxPoW txpow = zTxBlock.getTxPoW();
+			
+			//Check ChainID
+			if(!txpow.getChainID().isEqual(TxPoWChecker.CURRENT_NETWORK)) {
+				MinimaLogger.log("Invalid Block ChainID! "+txpow.getChainID()+" "+txpow.getTxPoWID());
+				return false;
+			}
+			
+			//Check the Block Number is correct
+			if(!txpow.getBlockNumber().isEqual(zParentNode.getBlockNumber().increment())) {
+				MinimaLogger.log("Invalid TxPoW block with wrong blocknumber "+txpow.getTxPoWID());
+				return false;
+			}
+			
+			//Check Parents..
+			if(!checkParents(zParentNode, txpow)) {
+				MinimaLogger.log("Invalid TxPoW Super Parents "+txpow.getTxPoWID());
+				return false;
+			}
+			
+			//Check TimeMilli is acceptable..
+			TxPoWTreeNode median = TxPoWGenerator.getMedianTimeBlock(zParentNode, GlobalParams.MEDIAN_BLOCK_CALC*2);
+			MiniNumber maxtime 	 = median.getTxPoW().getTimeMilli().add(MAX_TIME_FUTURE); 
+			if(txpow.getTimeMilli().isLess(median.getTxPoW().getTimeMilli())) {
+				MinimaLogger.log("Invalid TxPoW TimeMilli less than median 1 hr back "+txpow.getTxPoWID());
+				return false;
+			}else if(txpow.getTimeMilli().isMore(maxtime)) {
+				MinimaLogger.log("Invalid TxPoW TimeMilli more than 24 hrs in future "+txpow.getTxPoWID());
+				return false;
+			}
+			
+			//Check the block difficulty is correct
+			MiniData blockdifficulty = TxPoWGenerator.getBlockDifficulty(zParentNode);
+			if(!txpow.getBlockDifficulty().isEqual(blockdifficulty)) {
+				MinimaLogger.log("Incorrect TxPoW block difficulty @ "+txpow.getBlockNumber()+" "+txpow.getTxPoWID());
+				return false;
+			}
+			
+			//Check Magic numbers
+			Magic txpowmagic = txpow.getMagic();
+			if(!txpowmagic.checkSame(zParentNode.getTxPoW().getMagic().calculateNewCurrent())) {
+				MinimaLogger.log("Incorrect Magic values "+txpow.getBlockTransactions().size()+" "+txpow.getTxPoWID());
+				return false;
+			}
+						
+		}catch(Exception exc) {
+			MinimaLogger.log("ERROR checking TxBlock in slave node..");
 			MinimaLogger.log(exc);
 			
 			return false;
@@ -205,7 +279,15 @@ public class TxPoWChecker {
 		//Convert to unique Set and check equal size
 		HashSet<String> coinset = new HashSet<>(allcoinid);
 		if(coinset.size() != allcoinid.size()) {
-			MinimaLogger.log("Invalid TxPoW Transaction / Burn with non unique CoinIDs "+zTxPoW.getTxPoWID());
+			MinimaLogger.log("Invalid TxPoW Transaction / Burn with non unique CoinIDs "+zTxPoW.getTxPoWID()+" uniquesize:"+coinset.size()+" txncoins:"+allcoinid.size());
+
+			for(String coin : coinset) {
+				MinimaLogger.log("[!] Unique coinid : "+coin);
+			}
+			for(String coin : allcoinid) {
+				MinimaLogger.log("[!] All coinid : "+coin);
+			}
+			
 			return false;
 		}
 		
@@ -367,7 +449,7 @@ public class TxPoWChecker {
 	/**
 	 * Once accepted basic and signature checks are no longer needed..
 	 */
-	public static boolean checkTxPoWSimple(MMR zTipMMR, TxPoW zTxPoW, TxPoW zBlock) throws Exception {
+	public static boolean checkTxPoWSimple(MMR zTipMMR, TxPoW zTxPoW, TxPoW zBlock, boolean zLog) throws Exception {
 		
 		//Check TxPoW is required Minimum..
 		if(zTxPoW.getTxnDifficulty().isMore(zBlock.getMagic().getMinTxPowWork())) {
@@ -383,7 +465,7 @@ public class TxPoWChecker {
 		}
 		
 		//Check the MMR first - as quicker..
-		boolean valid = checkMMR(zTipMMR, zTxPoW);
+		boolean valid = checkMMR(zTipMMR, zTxPoW, zLog);
 		if(!valid) {
 			return false;
 		}
@@ -431,6 +513,13 @@ public class TxPoWChecker {
 		//Get the coin proofs
 		ArrayList<CoinProof> mmrproofs 	= zWitness.getAllCoinProofs();
 		int ins = mmrproofs.size();
+		
+		//Check same..
+		int inputssize = zTransaction.getAllInputs().size();
+		if(ins != inputssize) {
+			MinimaLogger.log("Wrong number of MMRProofs("+ins+") for Inputs("+inputssize+")");
+			return false;
+		}
 		
 		//Cycle through and check..
 		for(int i=0;i<ins;i++) {
@@ -527,18 +616,22 @@ public class TxPoWChecker {
 	 * Check the MMR Proofs
 	 */
 	public static boolean checkMMR(MMR zTipMMR, TxPoW zTxPoW) throws Exception {
-		
+		return checkMMR(zTipMMR, zTxPoW, true);
+	}
+	
+	public static boolean checkMMR(MMR zTipMMR, TxPoW zTxPoW, boolean zLog) throws Exception {
+			
 		//Check the Transaction..
-		boolean valid = checkMMR(zTipMMR, zTxPoW.getWitness());
+		boolean valid = checkMMR(zTipMMR, zTxPoW.getWitness(), zLog);
 		if(!valid) {
 			return false;
 		}
 		
 		//Check the Burn Transaction..
-		return checkMMR(zTipMMR, zTxPoW.getBurnWitness());
+		return checkMMR(zTipMMR, zTxPoW.getBurnWitness(), zLog);
 	}
 	
-	private static boolean checkMMR(MMR zTipMMR, Witness zWitness) throws Exception {
+	private static boolean checkMMR(MMR zTipMMR, Witness zWitness, boolean zLog) throws Exception {
 		//Get the all the MMR Proofs
 		ArrayList<CoinProof> mmrproofs 	= zWitness.getAllCoinProofs();
 		int proofs = mmrproofs.size();
@@ -549,10 +642,21 @@ public class TxPoWChecker {
 			//Get the Coin Proof
 			CoinProof cproof = mmrproofs.get(i);
 			
-			//Check the MMR
-			boolean validmmr = zTipMMR.checkProofTimeValid(cproof.getCoin().getMMREntryNumber(), cproof.getMMRData(), cproof.getMMRProof());
+			//Get the Coin..
+			Coin txcoin = cproof.getCoin();
+			
+			//Create the MMRData Leaf Node..
+			MMRData mmrcoin = MMRData.CreateMMRDataLeafNode(txcoin, txcoin.getAmount());
+			
+			//Is it valid..
+			boolean validmmr = zTipMMR.checkProofTimeValid(	cproof.getCoin().getMMREntryNumber(), 
+															mmrcoin, 
+															cproof.getMMRProof());
+			
 			if(!validmmr) {
-				MinimaLogger.log("Invalid MMR Proof!");
+				if(zLog) {
+					MinimaLogger.log("Invalid MMR Proof! @ "+zTipMMR.getBlockTime());
+				}
 				return false;
 			}
 		}

@@ -12,6 +12,7 @@ import org.minima.objects.base.MiniNumber;
 import org.minima.system.brains.TxPoWSearcher;
 import org.minima.system.commands.Command;
 import org.minima.system.commands.CommandException;
+import org.minima.system.commands.send.send;
 import org.minima.system.params.GlobalParams;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.json.JSONArray;
@@ -56,13 +57,16 @@ public class consolidate extends Command {
 				+ "dryrun: (optional)\n"
 				+ "    true or false, true will simulate the consolidate transaction but not execute it.\n"
 				+ "\n"
+				+ "password: (optional)\n"
+				+ "    If your Wallet is password locked you can unlock it for this one transaction - then relock it.\n "
+				+ "\n"
 				+ "Examples:\n"
 				+ "\n"
 				+ "consolidate tokenid:0x00\n"
 				+ "\n"
 				+ "consolidate tokenid:0x77.. coinage:10\n"
 				+ "\n"
-				+ "consolidate tokenid:0x00 maxcoins:5\n"
+				+ "consolidate tokenid:0x00 maxcoins:5 password:your_password\n"
 				+ "\n"
 				+ "consolidate tokenid:0x00 coinage:10 maxcoins:8 burn:1\n"
 				+ "\n"
@@ -72,7 +76,7 @@ public class consolidate extends Command {
 	@Override
 	public ArrayList<String> getValidParams(){
 		return new ArrayList<>(Arrays.asList(new String[]{"tokenid","coinage","maxcoins",
-				"maxsigs","burn","debug","dryrun"}));
+				"maxsigs","burn","debug","dryrun","password"}));
 	}
 	
 	@Override
@@ -93,22 +97,13 @@ public class consolidate extends Command {
 		}
 		
 		//Get the tip of the tree
-		TxPoWTreeNode tip 	= MinimaDB.getDB().getTxPoWTree().getTip();
+		TxPoWTreeNode tip = MinimaDB.getDB().getTxPoWTree().getTip();
 		
-		//Get the parent deep enough for valid confirmed coins
-		int confdepth = GlobalParams.MINIMA_CONFIRM_DEPTH.getAsInt();
-		for(int i=0;i<confdepth;i++) {
-			tip = tip.getParent();
-			if(tip == null) {
-				//Insufficient blocks
-				ret.put("status", false);
-				ret.put("message", "Insufficient blocks..");
-				return ret;
-			}
+		//How old do the coins need to be.. used by consolidate
+		MiniNumber coinage = getNumberParam("coinage", GlobalParams.MINIMA_CONFIRM_DEPTH);
+		if(coinage.isLess(GlobalParams.MINIMA_CONFIRM_DEPTH)) {
+			throw new CommandException("Coinage MUST be >= "+GlobalParams.MINIMA_CONFIRM_DEPTH);
 		}
-		
-		//How old do the coins need to be..
-		MiniNumber coinage = getNumberParam("coinage", MiniNumber.ZERO);
 				
 		//Lets build a transaction..
 		ArrayList<Coin> foundcoins	= TxPoWSearcher.getRelevantUnspentCoins(tip,tokenid,true);
@@ -190,11 +185,29 @@ public class consolidate extends Command {
 		MiniData myaddress 			= new MiniData(newwalletaddress.getAddress());
 		
 		//Construct the command
-		String command = "send coinage:"+coinage.toString()+" split:2 dryrun:"+dryrun+" debug:"+debug+" burn:"+burn.toString()
-				+" amount:"+totalamount.toString()+" address:"+myaddress.to0xString()+" tokenid:"+tokenid;
+		String command = "send coinage:"+coinage.toString()
+				+" split:2 dryrun:"+dryrun
+				+" debug:"+debug
+				+" burn:"+burn.toString()
+				+" amount:"+totalamount.toString()
+				+" address:"+myaddress.to0xString()
+				+" tokenid:"+tokenid;
 		
-		if(debug) {
-			MinimaLogger.log("Consolidate command : "+command);
+		//Is there a password..
+		if(existsParam("password")) {
+			
+			//Hide the password
+			if(debug) {
+				MinimaLogger.log("Consolidate command : "+command+" password:####");
+			}
+			
+			//Add the password
+			command +=" password:\""+getParam("password")+"\"";
+			
+		}else {
+			if(debug) {
+				MinimaLogger.log("Consolidate command : "+command);
+			}
 		}
 		
 		JSONArray result 		= Command.runMultiCommand(command);

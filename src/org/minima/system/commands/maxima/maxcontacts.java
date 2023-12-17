@@ -2,6 +2,7 @@ package org.minima.system.commands.maxima;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.StringTokenizer;
 
 import org.minima.database.MinimaDB;
 import org.minima.database.maxima.MaximaContact;
@@ -17,14 +18,17 @@ import org.minima.system.network.maxima.MaxMsgHandler;
 import org.minima.system.network.maxima.MaximaContactManager;
 import org.minima.system.network.maxima.MaximaManager;
 import org.minima.system.network.maxima.message.MaximaMessage;
+import org.minima.utils.MinimaLogger;
 import org.minima.utils.json.JSONArray;
 import org.minima.utils.json.JSONObject;
 import org.minima.utils.messages.Message;
 
 public class maxcontacts extends Command {
 
+	public static int MAX_CONTACT_NUMBER = 30;
+	
 	public maxcontacts() {
-		super("maxcontacts","[action:list|mls|add|remove|search] (contact:) (id:) (publickey:) - Manage your Maxima contacts");
+		super("maxcontacts","[action:list|add|remove|search] (contact:) (id:) (publickey:) - Manage your Maxima contacts");
 	}
 	
 	@Override
@@ -35,10 +39,11 @@ public class maxcontacts extends Command {
 				+ "\n"
 				+ "action:\n"
 				+ "    list : List your Maxima contacts to see their id, address details, MLS and if they are on the same chain.\n"
-				+ "    mls : Send a message to your contacts to refresh your MLS (Minima Location Service) details.\n"
 				+ "    add : Add a new contact. Use with the 'contact' parameter.\n"
 				+ "    remove : Remove a Maxima contact. Will also remove you from their contacts. Use with the 'id' parameter.\n"
 				+ "    search : Search for a contact. Use with the 'id' or 'publickey' parameter.\n"
+				+ "    export : Export a list of your contacts. Max addresses change constantly so you MUST import it quickly to your new node.\n"
+				+ "    import : Import a list of your contacts.\n"
 				+ "\n"
 				+ "contact: (optional)\n"
 				+ "    The Maxima contact address of another node. Can be found using the 'maxima' command.\n"
@@ -51,20 +56,24 @@ public class maxcontacts extends Command {
 				+ "\n"
 				+ "Examples:\n"
 				+ "\n"
-				+ "maxcontacts action:list\n"
+				+ "maxcontacts\n"
 				+ "\n"
-				+ "maxcontacts action:mls\n"
+				+ "maxcontacts action:list\n"
 				+ "\n"
 				+ "maxcontacts action:add contact:MxG18H..\n"
 				+ "\n"
 				+ "maxcontacts action:remove id:1\n"
+				+ "\n"
+				+ "maxcontacts action:export\n"
+				+ "\n"
+				+ "maxcontacts action:import contactlist:MxG1FE..,MxG1768..,etc\n"
 				+ "\n"
 				+ "maxcontacts action:search publickey:0x3081..\n";
 	}
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"action","contact","id","publickey"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"action","contact","id","publickey","enable","contactlist"}));
 	}
 	
 	@Override
@@ -112,47 +121,71 @@ public class maxcontacts extends Command {
 				conjson.put("chaintip", topblock.toString());
 				
 				//Check it..
-				TxPoWTreeNode checknode = tip.getPastNode(checkblock);
-				if(checknode != null) {
-					MiniData nodehash		= checknode.getTxPoW().getTxPoWIDData();
-					conjson.put("samechain", nodehash.isEqual(checkhash));
-				}else {
+				if(tip == null) {
 					conjson.put("samechain", false);
+					
+				}else {
+					TxPoWTreeNode checknode = tip.getPastNode(checkblock);
+					if(checknode != null) {
+						MiniData nodehash		= checknode.getTxPoW().getTxPoWIDData();
+						conjson.put("samechain", nodehash.isEqual(checkhash));
+					}else {
+						conjson.put("samechain", false);
+					}
 				}
 				
 				//And add..
 				allcontacts.add(conjson);
 			}
+			
+			details.put("allowallcontacts", max.getContactsManager().isAllowedAll());
 			details.put("contacts", allcontacts);
 			
-		}else if(func.equals("mls")) {
-			
-			//Send a message refreshing the MLS details
-			Message mls = new Message(MaximaManager.MAXIMA_CHECK_MLS);
-			mls.addBoolean("force", true);
-			Main.getInstance().getMaxima().PostMessage(mls);
-
-			details.put("mls", "Refreshing all contacts via MLS service");
-			
-		}else if(func.equals("myname")) {
-			
-			String name = getParam("name");
-			name = name.replace("\"", "");
-			name = name.replace("'", "");
-			name = name.replace(";", "");
-			
-			MinimaDB.getDB().getUserDB().setMaximaName(name);
-			
-			details.put("name", name);
-			
-			//Refresh
-			max.PostMessage(MaximaManager.MAXIMA_REFRESH);
-			
 		}else if(func.equals("add")) {
+			
+			//Are we allowing users.. ?
+			if(!max.getContactsManager().isAllowedAll()) {
+				ArrayList<String> allowed = max.getContactsManager().getAllowed();
+				if(allowed.size()==0) {
+					throw new CommandException("You have disabled adding contacts and have not allowed any public keys - use maxextra action:addallowed.. ");
+				}
+			}
 			
 			//Get the contact address
 			String address 	= getParam("contact");
 
+			//Is it a MAX address
+			if(address.startsWith("MAX#")) {
+				
+				//Get the Address..
+				JSONObject maxaddress = maxextra.getMaxAddress(address);
+				
+				//Get the address bit..
+				if((boolean)maxaddress.get("success")) {
+					
+					JSONObject resp 	= (JSONObject)maxaddress.get("response");
+					JSONObject mlsresp 	= (JSONObject)maxaddress.get("mlsresponse");
+					
+					//And finally..
+					address = mlsresp.getString("address");
+			
+					MinimaLogger.log("ATTEMPT ADD MAX CONTACT : "+address);
+					
+				}else {
+					throw new CommandException("MAX address invalid..");
+				}
+			}
+			
+			//Check is a valid address
+			if(!maxextra.checkValidMxAddress(address)) {
+				throw new CommandException("Invalid MX address : "+address);
+			}
+			
+			//Check max number
+			if(maxdb.getAllContacts().size()>=MAX_CONTACT_NUMBER) {
+				throw new CommandException("Curently there is a limit of "+MAX_CONTACT_NUMBER+" contacts..");
+			}
+			
 			//What data..
 			JSONObject contactinfo 	= max.getContactsManager().getMaximaContactInfo(true,false);
 			MiniString datastr 		= new MiniString(contactinfo.toString());
@@ -160,7 +193,7 @@ public class maxcontacts extends Command {
 			
 			//Now convert into the correct message..
 			Message sender = maxima.createSendMessage(address, MaximaContactManager.CONTACT_APPLICATION, mdata);
-			
+					
 			//Get the message
 			MaximaMessage maxmessage = (MaximaMessage) sender.getObject("maxima");
 			
@@ -191,7 +224,7 @@ public class maxcontacts extends Command {
 					if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_TOOBIG)) {
 						json.put("error", "Maxima Mesasge too big");
 					}else if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_UNKNOWN)) {
-						json.put("error", "Unkonw Address");
+						json.put("error", "Unkown Address");
 					}else if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_WRONGHASH)) {
 						json.put("error", "TxPoW Hash wrong");
 					}else {
@@ -252,6 +285,43 @@ public class maxcontacts extends Command {
 			}
 			
 			details.put("contact", chosen.toJSON());
+			
+		}else if(func.equals("export")) {
+			
+			//Export all the contacts..
+			String outputlist ="";
+			ArrayList<MaximaContact> contacts = maxdb.getAllContacts();
+			for(MaximaContact contact : contacts) {
+				String address = contact.getCurrentAddress();
+				outputlist+=address+",";
+			}
+			
+			//remove trailing ,
+			if(outputlist.endsWith(",")) {
+				outputlist = outputlist.substring(0,outputlist.length()-1);
+			}
+			
+			details.put("contacts", contacts.size());
+			details.put("contactlist", outputlist);
+			details.put("message", "Maxima addresses change constantly - so import it immediately..");
+			
+		}else if(func.equals("import")) {
+			
+			String contactlist = getParam("contactlist");
+			StringTokenizer strtok = new StringTokenizer(contactlist,",");
+			JSONArray resarray = new JSONArray();
+			while(strtok.hasMoreTokens()) {
+				String contact = strtok.nextToken();
+				contact = contact.replaceAll(" ", "");
+				String command = "maxcontacts action:add contact:"+contact;
+				
+				JSONArray res 		= Command.runMultiCommand(command);
+				JSONObject result 	= (JSONObject) res.get(0);
+				resarray.add(result);
+			}
+			
+			details.put("size", resarray.size());
+			details.put("contacts", resarray);
 			
 		}else {
 			throw new CommandException("Unknown action : "+func);

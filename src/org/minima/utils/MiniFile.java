@@ -1,6 +1,7 @@
 package org.minima.utils;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -9,11 +10,17 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 
 import org.minima.objects.base.MiniData;
 import org.minima.system.params.GeneralParams;
+import org.minima.utils.encrypt.PasswordCrypto;
+import org.minima.utils.json.JSONObject;
 
 public class MiniFile {
 	
@@ -136,6 +143,54 @@ public class MiniFile {
 		}
 	}
 	
+	public static void loadObjectSlow(File zFile, Streamable zObject) {
+		//Does the File exist
+		if(!zFile.exists()) {
+			MinimaLogger.log("Load Object file does not exist : "+zFile.getAbsolutePath());
+			return;
+		}
+		
+		try {
+			FileInputStream fis 	= new FileInputStream(zFile);
+			BufferedInputStream bis = new BufferedInputStream(fis,65536);
+			DataInputStream dis 	= new DataInputStream(bis);
+			zObject.readDataStream(dis);
+			
+			dis.close();
+			bis.close();
+			fis.close();
+			
+		} catch (IOException e) {
+			MinimaLogger.log(e);
+		}
+	}
+	
+	public static void loadObjectEncrypted(String zPassword, File zFile, Streamable zObject) {
+		//Does the File exist
+		if(!zFile.exists()) {
+			MinimaLogger.log("Load Object file does not exist : "+zFile.getAbsolutePath());
+			return;
+		}
+		
+		try {
+			//Read the whole file.. fast
+			byte[] data = MiniFile.readCompleteFile(zFile);
+			
+			//Now decrypt
+			MiniData decrypted = PasswordCrypto.decryptPassword(zPassword, new MiniData(data));
+			
+			//Convert to a Streamable object
+			ByteArrayInputStream bais = new ByteArrayInputStream(decrypted.getBytes());
+			DataInputStream dis = new DataInputStream(bais);
+			zObject.readDataStream(dis);
+			dis.close();
+			bais.close();
+			
+		} catch (Exception e) {
+			MinimaLogger.log(e);
+		}
+	}
+	
 	public static void saveObject(File zFile, Streamable zObject) {
 		try {
 			//Write into byte array
@@ -149,6 +204,62 @@ public class MiniFile {
 		}
 	}
 	
+	public static void saveObjectDirect(File zFile, Streamable zObject) {
+		//Check Parent
+		File parent = zFile.getAbsoluteFile().getParentFile();
+		if(!parent.exists()) {
+			parent.mkdirs();
+		}
+		
+		try {
+		
+			//Delete the old..
+			if(zFile.exists()) {
+				zFile.delete();
+				zFile.createNewFile();
+			}
+			
+			//Write it out..
+			FileOutputStream fos 		= new FileOutputStream(zFile, false);
+			
+			//256K buffer
+			BufferedOutputStream bos 	= new BufferedOutputStream(fos, 65536);
+			
+			DataOutputStream fdos 		= new DataOutputStream(bos);
+			
+			//And write it..
+			zObject.writeDataStream(fdos);
+			
+			//flush
+			fdos.flush();
+			bos.flush();
+			fos.flush();
+			
+			fdos.close();
+			bos.close();
+			fos.close();
+			
+		}catch(IOException exc) {
+			MinimaLogger.log(exc);
+		}
+	}
+	
+	public static void saveObjectEncrypted(String zPassword, File zFile, Streamable zObject) {
+		try {
+			//Write into byte array
+			MiniData casc = MiniData.getMiniDataVersion(zObject);
+			
+			//Convert to an encrypted object
+			MiniData encrypted = PasswordCrypto.encryptPassword(zPassword, casc);
+			
+			//save to disk
+			MiniFile.writeDataToFile(zFile, encrypted.getBytes());
+			
+		}catch(Exception exc) {
+			MinimaLogger.log(exc);
+		}
+	}
+	
 	public static void copyFile(File zOrig, File zCopy) throws IOException {
 		//Check file exists
 		if(!zOrig.exists()){
@@ -156,11 +267,61 @@ public class MiniFile {
 			return;
 		}
 		
-		//read in the original..
-		byte[] orig = readCompleteFile(zOrig);
+		InputStream is 	= null;
+	    OutputStream os = null;
+	    try {
+	        is = new FileInputStream(zOrig);
+	        os = new FileOutputStream(zCopy);
+	        byte[] buffer = new byte[16384];
+	        int length;
+	        while ((length = is.read(buffer)) > 0) {
+	            os.write(buffer, 0, length);
+	        }
+	    } finally {
+	        is.close();
+	        os.close();
+	    }
+	    
+//		//read in the original..
+//		byte[] orig = readCompleteFile(zOrig);
+//		
+//		//And now write..
+//		writeDataToFile(zCopy, orig);
+	}
+	
+	public static void copyFileOrFolder(File zOrig, File zCopy) throws IOException {
+		//Check file exists
+		if(!zOrig.exists()){
+			MinimaLogger.log("Trying to copy file that does not exist "+zOrig.getAbsolutePath());
+			return;
+		}
 		
-		//And now write..
-		writeDataToFile(zCopy, orig);
+		if(zOrig.isDirectory()) {
+			
+			//Make the new dir
+			zCopy.mkdirs();
+			
+			//Now scan through and recurse..
+			File[] children = zOrig.listFiles();
+			if(children == null) {
+				children = new File[0];
+			}
+			
+			//Loop through the children
+			int len = children.length; 
+			for(int i=0;i<len;i++) {
+				
+				//The new copy..
+				File newfile = new File(zCopy,children[i].getName());
+				
+				//And copy 
+				copyFileOrFolder(children[i], newfile);
+			}
+			
+		}else {
+			//Just copy the file..
+			copyFile(zOrig,zCopy);
+		}
 	}
 	
 	public static void deleteFileOrFolder(String mParentCheck, File zFile) {
@@ -201,6 +362,10 @@ public class MiniFile {
 		long tot = 0;
 		
 		File[] files = zFolder.listFiles();
+		if(files == null) {
+			return 0;
+		}
+		
 		for(File file : files) {
 			if(file.isDirectory()) {
 				tot = tot + getTotalFileSize(file);
@@ -209,6 +374,45 @@ public class MiniFile {
 			}
 		}
 		
+		return tot;
+	}
+	
+	public static long getTotalFileSizeWithNames(File zFolder, JSONObject zResult, int zMaxDepthInfo, int zDepth) {
+		
+		//Are there an children
+		JSONObject dirs = new JSONObject();
+				
+		//Add this File....
+		String fname = zFolder.getName();
+		
+		long tot = 0;
+		
+		File[] files = zFolder.listFiles();
+		if(files == null) {
+			return 0;
+		}
+		
+		for(File file : files) {
+			if(file.isDirectory()) {
+				JSONObject dirdata = new JSONObject();
+				long dirsize = getTotalFileSizeWithNames(file,dirdata, zMaxDepthInfo, zDepth+1);
+				tot = tot + dirsize;
+				
+				dirs.put(file.getName(), dirdata);
+				
+			}else {
+				tot += file.length();
+			}
+		}
+		
+		zResult.put("total", MiniFormat.formatSize(tot));
+		
+		if(zDepth<zMaxDepthInfo) {
+			if(dirs.size()>0) {
+				zResult.put("dirs", dirs);
+			}
+		}
+				
 		return tot;
 	}
 	
@@ -272,4 +476,57 @@ public class MiniFile {
 		
 		return pfile.toFile().getAbsolutePath().startsWith(pparent.toFile().getAbsolutePath());
 	}
+	
+	public static byte[] readAllBytes(InputStream inputStream) throws IOException {
+	    final int bufLen 	= 1024;
+	    byte[] buf 			= new byte[bufLen];
+	    int readLen;
+	    
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+
+        while ((readLen = inputStream.read(buf, 0, bufLen)) != -1) {
+        	outputStream.write(buf, 0, readLen);
+        }
+            
+        return outputStream.toByteArray();
+	}
+	
+	public static void decompressGzipFile(File gzipFile, File newFile) {
+        try {
+            FileInputStream fis 	= new FileInputStream(gzipFile);
+            GZIPInputStream gis 	= new GZIPInputStream(fis);
+            FileOutputStream fos 	= new FileOutputStream(newFile);
+            byte[] buffer = new byte[1024];
+            int len;
+            while((len = gis.read(buffer)) != -1){
+                fos.write(buffer, 0, len);
+            }
+            //close resources
+            fos.close();
+            gis.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        
+    }
+
+	public static void compressGzipFile(File file, File gzipFile) {
+        try {
+            FileInputStream fis 	= new FileInputStream(file);
+            FileOutputStream fos 	= new FileOutputStream(gzipFile);
+            GZIPOutputStream gzipOS = new GZIPOutputStream(fos);
+            byte[] buffer = new byte[1024];
+            int len;
+            while((len=fis.read(buffer)) != -1){
+                gzipOS.write(buffer, 0, len);
+            }
+            //close resources
+            gzipOS.close();
+            fos.close();
+            fis.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        
+    }
 }

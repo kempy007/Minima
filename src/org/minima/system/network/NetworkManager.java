@@ -8,14 +8,18 @@ import java.time.Duration;
 import java.util.Date;
 import java.util.Enumeration;
 
+import javax.net.ssl.SSLSocket;
+
 import org.minima.database.MinimaDB;
 import org.minima.database.userprefs.UserDB;
 import org.minima.system.network.minima.NIOManager;
+import org.minima.system.network.minima.NIOTraffic;
 import org.minima.system.network.p2p.P2PFunctions;
 import org.minima.system.network.p2p.P2PManager;
 import org.minima.system.network.rpc.CMDHandler;
+import org.minima.system.network.rpc.HTTPSServer;
 import org.minima.system.network.rpc.HTTPServer;
-import org.minima.system.network.webhooks.NotifyManager;
+import org.minima.system.network.rpc.Server;
 import org.minima.system.params.GeneralParams;
 import org.minima.utils.MiniFormat;
 import org.minima.utils.MinimaLogger;
@@ -25,6 +29,11 @@ import org.minima.utils.messages.MessageProcessor;
 
 public class NetworkManager {
 
+	/**
+	 * Have we shut this down..
+	 */
+	public boolean mShuttingDown = false;
+	
 	/**
 	 * NIO Manager
 	 */
@@ -38,14 +47,13 @@ public class NetworkManager {
 	/**
 	 * The RPC server
 	 */
-	HTTPServer mRPCServer = null;
-	
-	/**
-	 * The Web Hooks for Minima messages
-	 */
-	NotifyManager mNotifyManager;
+	Server mRPCServer = null;
 	
 	public NetworkManager() {
+		
+		//Not shutting down
+		mShuttingDown = false;
+		
 		//Calculate the local host
 		calculateHostIP();
 		
@@ -69,12 +77,9 @@ public class NetworkManager {
 		mNIOManager = new NIOManager(this);
 		
 		//Do we start the RPC server
-		if(MinimaDB.getDB().getUserDB().isRPCEnabled()) {
+		if(GeneralParams.RPC_ENABLED) {
 			startRPC();
 		}
-		
-		//Notifucation of Events
-		mNotifyManager = new NotifyManager();
 	}
 	
 	public void calculateHostIP() {
@@ -130,22 +135,12 @@ public class NetworkManager {
 		stats.put("hostset", GeneralParams.IS_HOST_SET);
 		stats.put("port", GeneralParams.MINIMA_PORT);
 		
-		JSONObject sshsettings = udb.getSSHTunnelSettings();
-//		if(udb.isSSHTunnelEnabled()) {
-//			stats.put("host", sshsettings.get("host"));
-//			stats.put("port", sshsettings.get("remoteport"));
-//			
-//		}else {
-//			stats.put("host", GeneralParams.MINIMA_HOST);
-//			stats.put("port", GeneralParams.MINIMA_PORT);
-//		}
-		
 		stats.put("connecting", mNIOManager.getNumberOfConnnectingClients());
 		stats.put("connected", mNIOManager.getNumberOfConnectedClients());
 		
 		//RPC Stats
 		JSONObject rpcjson = new JSONObject();
-		rpcjson.put("enabled", MinimaDB.getDB().getUserDB().isRPCEnabled());
+		rpcjson.put("enabled", GeneralParams.RPC_ENABLED);
 		rpcjson.put("port", GeneralParams.RPC_PORT);
 		stats.put("rpc", rpcjson);
 		
@@ -157,61 +152,76 @@ public class NetworkManager {
 		}
 		
 		//Read / Write stats..
+		NIOTraffic traffic = mNIOManager.getTrafficListener();
+		
 		JSONObject readwrite = new JSONObject();
 		
-		Duration dur = Duration.ofMillis(System.currentTimeMillis() - mNIOManager.getTrafficListener().getStartTime());
+		Duration dur = Duration.ofMillis(System.currentTimeMillis() - traffic.getStartTime());
 		long mins 	 = dur.toMinutes(); 
 		if(mins==0) {
 			mins = 1;
 		}
 		
-		Date starter = new Date(mNIOManager.getTrafficListener().getStartTime());
+		
+		Date starter = new Date(traffic.getStartTime());
 		readwrite.put("from", starter.toString());
-		readwrite.put("totalread", MiniFormat.formatSize(mNIOManager.getTrafficListener().getTotalRead()));
-		readwrite.put("totalwrite", MiniFormat.formatSize(mNIOManager.getTrafficListener().getTotalWrite()));
-		long speedread 	= mNIOManager.getTrafficListener().getTotalRead() / mins;
-		long speedwrite = mNIOManager.getTrafficListener().getTotalWrite() / mins;
+		readwrite.put("totalread", MiniFormat.formatSize(traffic.getTotalRead()));
+		readwrite.put("totalwrite", MiniFormat.formatSize(traffic.getTotalWrite()));
+		readwrite.put("breakdown",traffic.getBreakdown());
+		
+		long speedread 	= traffic.getTotalRead() / mins;
+		long speedwrite = traffic.getTotalWrite() / mins;
 		readwrite.put("read",MiniFormat.formatSize(speedread)+"/min");
 		readwrite.put("write",MiniFormat.formatSize(speedwrite)+"/min");
+		
+		
 		stats.put("traffic", readwrite);
 		
-		
-//		//SSH Tunnel
-//		JSONObject ssh = new JSONObject();
-//		if(udb.isSSHTunnelEnabled()) {
-//			ssh.put("enabled", true);
-//			ssh.put("user", sshsettings.get("username")+"@"+sshsettings.get("host"));
-//			stats.put("sshtunnel", ssh);
-//		}else {
-//			ssh.put("enabled", false);
-//		}
 		
 		return stats;
 	}
 	
 	public void startRPC() {
 		if(mRPCServer == null) {
-			//Start The RPC server
-			mRPCServer = new HTTPServer(GeneralParams.RPC_PORT) {
-				
-				@Override
-				public Runnable getSocketHandler(Socket zSocket) {
-					return new CMDHandler(zSocket);
-				}
-			};
 			
+			//Are we SSL
+			if(GeneralParams.RPC_SSL) {
+				
+				//Start The RPC server
+				mRPCServer = new HTTPSServer(GeneralParams.RPC_PORT) {
+					
+					@Override
+					public Runnable getSocketHandler(SSLSocket zSocket) {
+						return new CMDHandler(zSocket);
+					}
+				};
+				
+			}else {
+				
+				//Start The RPC server
+				mRPCServer = new HTTPServer(GeneralParams.RPC_PORT) {
+					
+					@Override
+					public Runnable getSocketHandler(Socket zSocket) {
+						return new CMDHandler(zSocket);
+					}
+				};				
+			}
 		}
 	}
 	
 	public void stopRPC() {
 		if(mRPCServer != null) {
 			//Stop the RPC
-			mRPCServer.stop();
+			mRPCServer.shutdown();
 			mRPCServer = null;
 		}
 	}
 	
 	public void shutdownNetwork() {
+		//We are trying toi shutdown
+		mShuttingDown = true;
+		
 		//And the RPC
 		stopRPC();
 		
@@ -224,16 +234,14 @@ public class NetworkManager {
 		}else {
 			mP2PManager.stopMessageProcessor();
 		}
-//		mP2PManager.PostMessage(P2PFunctions.P2P_SHUTDOWN);
-		
-		//And the notify Manager
-		mNotifyManager.shutDown();
+	}
+	
+	public boolean isShuttingDowen() {
+		return mShuttingDown;
 	}
 	
 	public boolean isShutDownComplete() {
-		return 		mNIOManager.isShutdownComplete() 
-				&&  mP2PManager.isShutdownComplete()
-				&&  mNotifyManager.isShutdownComplete();
+		return 	mNIOManager.isShutdownComplete() &&  mP2PManager.isShutdownComplete();
 	}
 	
 	public MessageProcessor getP2PManager() {
@@ -242,9 +250,5 @@ public class NetworkManager {
 	
 	public NIOManager getNIOManager() {
 		return mNIOManager;
-	}
-	
-	public NotifyManager getNotifyManager() {
-		return mNotifyManager;
 	}
 }

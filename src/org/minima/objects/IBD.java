@@ -10,7 +10,6 @@ import java.util.HashSet;
 
 import org.minima.database.MinimaDB;
 import org.minima.database.archive.ArchiveManager;
-import org.minima.database.archive.MySQLConnect;
 import org.minima.database.cascade.Cascade;
 import org.minima.database.cascade.CascadeNode;
 import org.minima.database.txpowtree.TxPoWTreeNode;
@@ -24,6 +23,11 @@ import org.minima.utils.Streamable;
 
 public class IBD implements Streamable {
 
+	/**
+	 * Maximum numbver of cblocks in an IBD
+	 */
+	public static final MiniNumber MAX_BLOCKS_FOR_IBD = new MiniNumber(34000);
+	
 	/**
 	 * The back end Cascade - only sent for a new user - can be null
 	 */
@@ -39,15 +43,20 @@ public class IBD implements Streamable {
 		mTxBlocks 	= new ArrayList<>();
 	}
 	
-	public void createIBD(Greeting zGreeting) {
+	/**
+	 * Return whether or not this user gave us a valid greeting
+	 */
+	public boolean createIBD(Greeting zGreeting) {
 		
 		//The tree..
 		TxPowTree txptree = MinimaDB.getDB().getTxPoWTree();
 		
+		boolean isvalid = true;
+		
 		//Are we a fresh user..
 		if(txptree.getTip() == null) {
 			//We have nothing.. !
-			return;
+			return isvalid;
 		}
 		
 		//Lock the DB - cascade and tree tip / root cannot change while doing this..
@@ -103,17 +112,54 @@ public class IBD implements Streamable {
 					//Did we find a block..
 					if(!found.isEqual(MiniNumber.MINUSONE)) {
 						
-						//Add the whole tree first
-						while(tip != null) {
-							mTxBlocks.add(0,tip.getTxBlock());
-							tip = tip.getParent();
+						//Check total..
+						boolean toobig = false;
+						MiniNumber total = myroot.sub(found);
+						if(total.isMore(MAX_BLOCKS_FOR_IBD)) {
+							
+							//Too big..
+							toobig = true;
 						}
 						
-						//And NOW - Load the range..
-						ArrayList<TxBlock> blocks = MinimaDB.getDB().getArchive().loadBlockRange(found, myroot);
-						for(TxBlock block : blocks) {
-							mTxBlocks.add(0,block);
+						if(!toobig) {
+							
+							//Add the whole tree first
+							while(tip != null) {
+								mTxBlocks.add(0,tip.getTxBlock());
+								tip = tip.getParent();
+							}
+							
+							//And NOW - Load the range..
+							ArrayList<TxBlock> blocks = MinimaDB.getDB().getArchive().loadBlockRange(found, myroot);
+							for(TxBlock block : blocks) {
+								mTxBlocks.add(0,block);
+							}
+							
+						}else {
+							
+							MinimaLogger.log("Intersection found but User too far back to sync.. too many blocks:"+total+" max:"+MAX_BLOCKS_FOR_IBD);
+							createCompleteIBD();
 						}
+						
+//						//Add the whole tree first
+//						while(tip != null) {
+//							mTxBlocks.add(0,tip.getTxBlock());
+//							tip = tip.getParent();
+//						}
+//						
+//						//And NOW - Load the range..
+//						ArrayList<TxBlock> blocks = MinimaDB.getDB().getArchive().loadBlockRange(found, myroot);
+//						
+//						//Check not tooo many
+//						if(blocks.size()>34000) {	
+//							MinimaLogger.log("Intersection found but User too far back to sync.. too many blocks "+blocks.size()+" max:34000");
+//							createCompleteIBD();
+//						}else {
+//							for(TxBlock block : blocks) {
+//								mTxBlocks.add(0,block);
+//							}
+//						}
+						
 					}else {
 						MinimaLogger.log("No Archive blocks found to match New User.. ");
 						createCompleteIBD();
@@ -154,8 +200,6 @@ public class IBD implements Streamable {
 					//Did we find it.. ?
 					if(found) {
 						
-						MinimaLogger.log("Crossover found @ "+foundblockID);
-						
 						//Send from then onwards as SyncBlocks..
 						tip = MinimaDB.getDB().getTxPoWTree().getTip();
 						while(tip != null) {
@@ -172,7 +216,11 @@ public class IBD implements Streamable {
 							tip = tip.getParent();
 						}
 					}else {
-						MinimaLogger.log("[!] No Crossover found whilst syncing with new node. They are on a different chain. Please check you are on the correct chain");
+						MinimaLogger.log("[!] When creating IBD - No Crossover found whilst syncing with new node. They are on a different chain. Please check you are on the correct chain");
+						
+						//This user should not be connected to again..
+						isvalid = false;
+						
 						createCompleteIBD();
 					}
 				}
@@ -184,6 +232,8 @@ public class IBD implements Streamable {
 		
 		//Unlock..
 		MinimaDB.getDB().readLock(false);
+		
+		return isvalid;
 	}
 	
 	public void createCompleteIBD() throws IOException {
@@ -191,6 +241,7 @@ public class IBD implements Streamable {
 		mCascade = MinimaDB.getDB().getCascade().deepCopy();
 	
 		//And now add all the blocks.. root will be first
+		mTxBlocks = new ArrayList<>();
 		TxPoWTreeNode tip = MinimaDB.getDB().getTxPoWTree().getTip();
 		while(tip != null) {
 			mTxBlocks.add(0,tip.getTxBlock());
@@ -213,6 +264,10 @@ public class IBD implements Streamable {
 		
 			//Are we shutting down..
 			if(Main.getInstance().isShuttingDown()) {
+				
+				//Unlock..
+				MinimaDB.getDB().readLock(false);
+				
 				return;
 			}
 			
@@ -232,44 +287,109 @@ public class IBD implements Streamable {
 	}
 	
 	public void createArchiveIBD(MiniNumber zFirstBlock) {
+		createArchiveIBD(zFirstBlock, MinimaDB.getDB().getArchive(), false);
+	}
+	
+	public void createArchiveIBD(MiniNumber zFirstBlock, ArchiveManager zArchiveDB, boolean zUseLocal) {
+		
+		//Are we shutting down..
+		if(Main.getInstance().isShuttingDown()) {
+			return;
+		}
 		
 		//Get the ArchiveManager
-		ArchiveManager arch = MinimaDB.getDB().getArchive();
-				
-		//Are we storing Archive Data
-		if(arch.isStoreMySQL()) {
+		ArchiveManager arch = zArchiveDB;
 			
-			//Get the SQL Connect
-			MySQLConnect mySQLConnect = arch.getMySQLCOnnect();
+		//Lock the DB - cascade and tree tip / root cannot change while doing this..
+		MinimaDB.getDB().readLock(true);
+		
+		try {
 			
-			//Lock the DB - cascade and tree tip / root cannot change while doing this..
-			MinimaDB.getDB().readLock(true);
-			
-			try {
-				if(zFirstBlock.isEqual(MiniNumber.ZERO)) {
-					//Load cascade if there is one
-					mCascade = mySQLConnect.loadCascade();
-				}
+			//Are we shutting down..
+			if(Main.getInstance().isShuttingDown()) {
 				
-				//Was therea cascade
-				MiniNumber startcount = zFirstBlock;
-				if(mCascade != null) {
-					startcount = mCascade.getTip().getTxPoW().getBlockNumber();
-				}
+				//Unlock..
+				MinimaDB.getDB().readLock(false);
 				
-				//Load the block range..
-				ArrayList<TxBlock> blocks = mySQLConnect.loadBlockRange(zFirstBlock);
-				for(TxBlock block : blocks) {
-					mTxBlocks.add(block);
-				}
-				
-			}catch(Exception exc) {
-				MinimaLogger.log(exc);
+				return;
 			}
 			
-			//Unlock..
-			MinimaDB.getDB().readLock(false);
+			MiniNumber startcount = zFirstBlock;
+			
+			if(zFirstBlock.isEqual(MiniNumber.ZERO)) {
+				
+				//What is the first block
+				TxBlock root = arch.loadLastBlock();
+				if(root != null) {
+				
+					if(!root.getTxPoW().getBlockNumber().isEqual(MiniNumber.ONE)) {
+					
+						//Load cascade if there is one
+						mCascade = arch.loadCascade();
+					
+						if(mCascade != null) {
+							startcount = mCascade.getTip().getTxPoW().getBlockNumber().increment();
+						}
+					}
+				}
+			}
+			
+			//Load the block range..
+			MiniNumber end = startcount.add(MiniNumber.TWOFIVESIX);
+			ArrayList<TxBlock> blocks = arch.loadBlockRange(startcount.decrement(),end, false);
+			for(TxBlock block : blocks) {
+				mTxBlocks.add(block);
+			}
+			
+			//Are we local
+			if(!zUseLocal) {
+			
+				//And now add all the blocks.. root will be first
+				TxPoWTreeNode root 		= MinimaDB.getDB().getTxPoWTree().getRoot();
+				MiniNumber rootblock 	= root.getTxPoW().getBlockNumber();
+				
+				MiniNumber reqblock = zFirstBlock; 
+				if(rootblock.isEqual(MiniNumber.ONE) && reqblock.isEqual(MiniNumber.ZERO)) {
+					MinimaLogger.log("Root Tree Archive IBD - starts at genesis");
+					reqblock = MiniNumber.ONE;
+				}
+				
+				if(rootblock.isEqual(reqblock)) {
+					
+					MinimaLogger.log("Archive request for main tree data @ "+reqblock);
+					
+					//Add the whole tree..
+					TxBlock lastblock = null;
+					ArrayList<TxBlock> mainblocks = new ArrayList<>();
+					TxPoWTreeNode tip = MinimaDB.getDB().getTxPoWTree().getTip();
+					while(tip != null) {
+						lastblock = tip.getTxBlock();
+						mainblocks.add(0,lastblock);
+						tip = tip.getParent();
+					}
+					
+					//All good - or has it changed this exact second
+					MiniNumber lastadded=lastblock.getTxPoW().getBlockNumber();
+					if(lastadded.isEqual(reqblock)) {
+					
+						//And now add these..
+						for(TxBlock block : mainblocks) {
+							mTxBlocks.add(block);
+						}
+					}else {
+						
+						//IBD main chain changed..
+						MinimaLogger.log("Archive main tree data error.. root:"+lastadded+" req:"+reqblock);
+					}
+				}
+			}
+			
+		}catch(Exception exc) {
+			MinimaLogger.log(exc);
 		}
+		
+		//Unlock..
+		MinimaDB.getDB().readLock(false);
 	}
 	
 	/**
@@ -293,6 +413,10 @@ public class IBD implements Streamable {
 	
 	public ArrayList<TxBlock> getTxBlocks(){
 		return mTxBlocks;
+	}
+	
+	public void setTxBlocks(ArrayList<TxBlock> zBlocks) {
+		mTxBlocks = zBlocks;
 	}
 	
 	//Check this IBD at least seems right..
@@ -320,6 +444,13 @@ public class IBD implements Streamable {
 					//Something wrong..
 					MinimaLogger.log("[!] Received INVALID IBD with cascade tip:"+casctip+" and tree start:"+treestart);
 					
+					return false;
+				}
+				
+				//Check Cascade data is consistent
+				boolean checkcascade = Cascade.checkCascadeCorrect(getCascade());
+				if(!checkcascade) {
+					MinimaLogger.log("[!] INCONSISTENT Cascade received! length:"+getCascade().getLength());
 					return false;
 				}
 			}
@@ -359,8 +490,14 @@ public class IBD implements Streamable {
 		//And now write all the sync blocks.. if any
 		int len = mTxBlocks.size();
 		MiniNumber.WriteToStream(zOut, len);
-		for(TxBlock block : mTxBlocks) {
-			block.writeDataStream(zOut);
+		
+		try {
+			for(TxBlock block : mTxBlocks) {
+				block.writeDataStream(zOut);
+			}
+		}catch(OutOfMemoryError oom ) {
+			oom.printStackTrace();
+			MinimaLogger.log("OUT OF MEMORY on IBD size:"+len);
 		}
 	}
 
@@ -480,8 +617,6 @@ public class IBD implements Streamable {
 		BigInteger myweight;
 		BigInteger theirweight;
 		if(found) {
-			MinimaLogger.log("Intersection of chains found @ "+foundblockID);
-			
 			IBD mynew 		= createShortenedIBD(current, foundblockID);
 			myweight 		= mynew.getTotalWeight();
 			

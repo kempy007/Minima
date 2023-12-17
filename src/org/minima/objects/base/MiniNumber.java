@@ -179,6 +179,10 @@ public class MiniNumber implements Streamable, Comparable<MiniNumber> {
 		return mNumber.intValue();
 	}
 	
+	public double getAsDouble() {
+		return mNumber.doubleValue();
+	}
+	
 	/**
 	 * Basic arithmetic functions 
 	 */
@@ -200,6 +204,10 @@ public class MiniNumber implements Streamable, Comparable<MiniNumber> {
 	
 	public MiniNumber pow(int zNumber) {
 		return new MiniNumber( mNumber.pow(zNumber,MATH_CONTEXT) );
+	}
+	
+	public MiniNumber sqrt() {
+		return new MiniNumber( mNumber.sqrt(MATH_CONTEXT) );
 	}
 	
 	public MiniNumber modulo(MiniNumber zNumber) {

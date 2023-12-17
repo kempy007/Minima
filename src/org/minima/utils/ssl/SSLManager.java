@@ -29,7 +29,7 @@ public class SSLManager {
 		sslkeyfolder.mkdirs();
 		
 		//The actual Key Store..
-		File sslkeyfile 	= new File(sslkeyfolder,"sslkeystore"); 
+		File sslkeyfile = new File(sslkeyfolder,"sslkeystore"); 
 		
 		return sslkeyfile;
 	}
@@ -38,35 +38,56 @@ public class SSLManager {
 		
 		try {
 			
-			File sslfile = getKeystoreFile();
+			//Check file and password exist
+			File sslfile 		 = getKeystoreFile();
+			String keystorecheck = MinimaDB.getDB().getUserDB().getString("sslkeystorepass", null);
 			
-			if(!sslfile.exists()) {
-				MinimaLogger.log("Generating SSL Keystore.. "+KeyStore.getDefaultType());
+			if(!sslfile.exists() || (keystorecheck==null)) {
 				
-				//Set a Random Key
-				String keystorepass = MiniData.getRandomData(32).to0xString(); 
-				MinimaDB.getDB().getUserDB().setString("sslkeystorepass", keystorepass);
-				
-				// Create Key
-		        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
-		        keyPairGenerator.initialize(4096);
-		        KeyPair keyPair 			= keyPairGenerator.generateKeyPair();
-		        final X509Certificate cert 	= SelfSignedCertGenerator.generate(keyPair, "SHA256withRSA", "localhost", 730);
-		        KeyStore createkeystore 	= SelfSignedCertGenerator.createKeystore(cert, keyPair.getPrivate());
-
-		        // Save the File
-		        OutputStream fos = new FileOutputStream(sslfile);
-		        createkeystore.store(fos, keystorepass.toCharArray());
-		        fos.flush();
-		        fos.close();
+				//Generate the key store..
+				generateKeyStore();
+						
 			}else {
+				
+				//Try to load keystore..
 				MinimaLogger.log("Loading SSL Keystore.. ");
+				
+				KeyStore ks = getSSLKeyStore();
+				if(ks == null) {
+					//Problem..
+					MinimaLogger.log("Issue with keystore.. regenerate. Could be issues with UserDB..");
+					
+					//Some issue.. recreate..
+					generateKeyStore();
+				}
 			}
 			
-	        
 		}catch(Exception exc) {
 			MinimaLogger.log(exc);
 		}
+	}
+	
+	private static void generateKeyStore() throws Exception {
+		
+		MinimaLogger.log("Generating SSL Keystore.. "+KeyStore.getDefaultType());
+		
+		//Set a Random Key - and save DB
+		String keystorepass = MiniData.getRandomData(32).to0xString(); 
+		MinimaDB.getDB().getUserDB().setString("sslkeystorepass", keystorepass);
+		MinimaDB.getDB().saveUserDB();
+		
+		// Create Key
+        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("RSA");
+        keyPairGenerator.initialize(4096);
+        KeyPair keyPair 			= keyPairGenerator.generateKeyPair();
+        final X509Certificate cert 	= SelfSignedCertGenerator.generate(keyPair, "SHA256withRSA", "localhost", 730);
+        KeyStore createkeystore 	= SelfSignedCertGenerator.createKeystore(cert, keyPair.getPrivate());
+
+        // Save the File
+        OutputStream fos = new FileOutputStream(getKeystoreFile());
+        createkeystore.store(fos, keystorepass.toCharArray());
+        fos.flush();
+        fos.close();
 	}
 	
 	public static KeyStore getSSLKeyStore() {
@@ -83,7 +104,7 @@ public class SSLManager {
 			return loadedKeyStore;
 			
 		}catch(Exception exc) {
-			MinimaLogger.log(exc);
+			MinimaLogger.log(exc.toString());
 		}
 		
 		return null;

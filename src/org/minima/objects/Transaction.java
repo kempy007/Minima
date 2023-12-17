@@ -1,5 +1,6 @@
 package org.minima.objects;
 
+import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -361,6 +362,9 @@ public class Transaction implements Streamable {
 	 */
 	public void calculateTransactionID() {
 		mTransactionID = Crypto.getInstance().hashObject(this);
+		if(mTransactionID==null) {
+			throw new IllegalArgumentException("NULL mTransactionID!");
+		}
 	}
 	
 	public MiniData getTransactionID() {
@@ -411,7 +415,39 @@ public class Transaction implements Streamable {
 		ret.put("linkhash", mLinkHash.to0xString());
 	
 		calculateTransactionID();
-		ret.put("transactionid", mTransactionID.to0xString());
+		if(mTransactionID==null) {
+			ret.put("transactionid", "null");
+		}else {
+			ret.put("transactionid", mTransactionID.to0xString());
+		}
+		
+		return ret;
+	}
+	
+	public long calculateStateSize() {
+		ByteArrayOutputStream baos 	= new ByteArrayOutputStream();
+		DataOutputStream dos 		= new DataOutputStream(baos);
+		
+		long ret = 1000000;
+		try {
+			//How many state variables..
+			MiniNumber statelen = new MiniNumber(mState.size());
+			statelen.writeDataStream(dos);
+			for(StateVariable sv : mState) {
+				sv.writeDataStream(dos);
+			}
+			
+			dos.flush();
+			
+			ret = baos.toByteArray().length;
+			
+			dos.close();
+			baos.close();
+			
+		}catch(Exception exc){
+			MinimaLogger.log("Calcualte state size error!");
+			MinimaLogger.log(exc);
+		}
 		
 		return ret;
 	}

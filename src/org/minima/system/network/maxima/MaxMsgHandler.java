@@ -6,9 +6,13 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ConnectException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 
+import org.minima.database.MinimaDB;
+import org.minima.database.txpowtree.TxPoWTreeNode;
 import org.minima.objects.base.MiniByte;
 import org.minima.objects.base.MiniData;
 import org.minima.system.Main;
@@ -20,6 +24,7 @@ import org.minima.system.network.maxima.message.MaximaPackage;
 import org.minima.system.network.maxima.mls.MLSPacketGETResp;
 import org.minima.system.network.minima.NIOManager;
 import org.minima.system.network.minima.NIOMessage;
+import org.minima.system.params.GeneralParams;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.encrypt.CryptoPackage;
 import org.minima.utils.encrypt.SignVerify;
@@ -50,6 +55,13 @@ public class MaxMsgHandler extends MessageProcessor {
 			String host 	= sendmessage.getString("tohost");
 			int port		= sendmessage.getInteger("toport");
 			
+			//Do we have a tip..
+			TxPoWTreeNode tip = MinimaDB.getDB().getTxPoWTree().getTip();
+			if(tip == null) {
+				//No TIP - cannot construct a MaxTxPoW..
+				return;
+			}
+			
 			try {
 				//Create the Maxima Message
 				MiniData maxmsg = constructMaximaData(sendmessage);
@@ -64,19 +76,27 @@ public class MaxMsgHandler extends MessageProcessor {
 				if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_OK)) {
 					//All fine.. 
 				}else if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_FAIL)) {
-					MinimaLogger.log("Warning : Maxima message not delivered to.. "+host+":"+port);
+					if(GeneralParams.MAXIMA_LOGS) {
+						MinimaLogger.log("Warning : Maxima message not delivered to.. "+host+":"+port);
+					}
 				}else if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_TOOBIG)) {
 					MinimaLogger.log("Warning : Maxima message too big not delivered to.. "+host+":"+port);
 				}else if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_UNKNOWN)) {
-					MinimaLogger.log("Warning : Maxima message Unknown Address not delivered to.. "+host+":"+port);
+					if(GeneralParams.MAXIMA_LOGS) {
+						MinimaLogger.log("Warning : Maxima message Unknown Address not delivered to.. "+host+":"+port);
+					}
 				}else if(validresp.isEqual(MaximaManager.MAXIMA_RESPONSE_WRONGHASH)) {
 					MinimaLogger.log("Warning : Maxima message TxPoW Hash wrong not delivered to.. "+host+":"+port);
 				}else {
 					MinimaLogger.log("Unknown Maxima response message "+validresp.to0xString());
 				}
 			
+			} catch (SocketTimeoutException ce) {
+				
+			} catch (ConnectException ce) {
+				
 			} catch (Exception e) {
-				MinimaLogger.log(host+":"+port+" "+e.toString());
+				MinimaLogger.log("MaxMsgHandler "+host+":"+port+" "+e.toString());
 			}
 		}
 	}
@@ -155,7 +175,7 @@ public class MaxMsgHandler extends MessageProcessor {
 		dos.flush();
 		
 		//Tell the NIO
-		Main.getInstance().getNIOManager().getTrafficListener().addWriteBytes(zMaxMessage.getLength());
+		Main.getInstance().getNIOManager().getTrafficListener().addWriteBytes("sendMaxPacket",zMaxMessage.getLength());
 		
 		//Now get a response.. should be ONE_ID.. give it 10 second max.. ( might get a block..)
 		MiniData valid = MaximaManager.MAXIMA_RESPONSE_FAIL;
@@ -166,7 +186,7 @@ public class MaxMsgHandler extends MessageProcessor {
 			MiniData resp = MiniData.ReadFromStream(dis);
 			
 			//Tell the NIO
-			Main.getInstance().getNIOManager().getTrafficListener().addReadBytes(resp.getLength());
+			Main.getInstance().getNIOManager().getTrafficListener().addReadBytes("sendMaxPacket",resp.getLength());
 			
 			if(resp.isEqual(MaximaManager.MAXIMA_RESPONSE_OK)) {
 				valid = resp;
@@ -230,9 +250,10 @@ public class MaxMsgHandler extends MessageProcessor {
 				//Is it an error Message
 				if(!found) {
 					
+					ByteArrayInputStream bais 	= new ByteArrayInputStream(msgdata);
+					DataInputStream respdis 	= new DataInputStream(bais);
+					
 					try {
-						ByteArrayInputStream bais 	= new ByteArrayInputStream(msgdata);
-						DataInputStream respdis 	= new DataInputStream(bais);
 						
 						//What Type..
 						MiniByte type = MiniByte.ReadFromStream(respdis);
@@ -247,14 +268,17 @@ public class MaxMsgHandler extends MessageProcessor {
 						//Ok - it's read
 						valid = MaximaManager.MAXIMA_RESPONSE_FAIL;
 						
-						respdis.close();
-						bais.close();
-						
 						break;
 						
 					}catch(Exception exc){
 						found = false;
 						//MinimaLogger.log("Could not convert MLS GET Package : "+exc);
+					
+					}finally {
+						
+						//Close resources
+						respdis.close();
+						bais.close();
 					}
 				}
 			}

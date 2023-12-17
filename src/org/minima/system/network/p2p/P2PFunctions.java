@@ -74,6 +74,28 @@ public class P2PFunctions {
     	return mLocalAddresses;
     }
     
+    /**
+     * An array of invalid IPs that you should not connect to..
+     */
+    public static HashSet<String> mInvalidPeers = new HashSet<>();
+    public static void addInvalidPeer(String zHostPost) {
+    	if(!mInvalidPeers.contains(zHostPost)) {
+    		MinimaLogger.log("INVALID PEER added to List! "+zHostPost);
+    		mInvalidPeers.add(zHostPost);
+    	}else {
+    		MinimaLogger.log("INVALID PEER already added to list.. "+zHostPost);
+    	}
+    }
+    
+    public static boolean isInvalidPeer(String zHostPost) {
+    	return mInvalidPeers.contains(zHostPost);
+    }
+    
+    //Call this every 24 hours or so..
+    public static void clearInvalidPeers() {
+    	mInvalidPeers.clear();
+    }
+    
     public static boolean isIPLocal(String fullhost) {
     	return 	fullhost.startsWith("127.")  ||
     			fullhost.startsWith("localhost") ||
@@ -88,7 +110,7 @@ public class P2PFunctions {
     
     public static boolean isNetAvailable() {
         try {
-            final URL url = new URL("http://www.google.com");
+            final URL url = new URL("https://www.google.com");
             final URLConnection conn = url.openConnection();
             conn.connect();
             conn.getInputStream().close();
@@ -118,6 +140,12 @@ public class P2PFunctions {
         msg.addString("host", zHost);
         msg.addInteger("port", zPort);
 
+        //Check if added to naughty list
+        if(isInvalidPeer(zHost+":"+zPort)) {
+        	MinimaLogger.log("P2P CHECK CONNECT : Trying to connect to Invalid Peer - disallowed @ "+zHost+":"+zPort);
+        	return false;
+        }
+        
         boolean doConnect = true;
         try {
             boolean islocal = isIPLocal(zHost);
@@ -245,5 +273,9 @@ public class P2PFunctions {
         return hostnames;
     }
 
-
+    public static void main(String[] zArgs) {
+    	
+    	System.out.println("NET:"+isNetAvailable());
+    	
+    }
 }

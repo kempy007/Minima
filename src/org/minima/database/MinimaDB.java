@@ -1,10 +1,13 @@
 package org.minima.database;
 
 import java.io.File;
+import java.sql.SQLException;
+import java.util.HashSet;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.minima.database.archive.ArchiveManager;
+import org.minima.database.archive.TxBlockDB;
 import org.minima.database.cascade.Cascade;
 import org.minima.database.maxima.MaximaDB;
 import org.minima.database.minidapps.MDSDB;
@@ -13,9 +16,12 @@ import org.minima.database.txpowtree.TxPowTree;
 import org.minima.database.userprefs.UserDB;
 import org.minima.database.userprefs.txndb.TxnDB;
 import org.minima.database.wallet.Wallet;
+import org.minima.objects.base.MiniNumber;
+import org.minima.system.Main;
 import org.minima.system.network.p2p.P2PDB;
 import org.minima.system.params.GeneralParams;
 import org.minima.utils.MiniFile;
+import org.minima.utils.MiniFormat;
 import org.minima.utils.MinimaLogger;
 
 public class MinimaDB {
@@ -41,6 +47,7 @@ public class MinimaDB {
 	Wallet			mWallet;
 	MaximaDB	 	mMaximaDB;
 	MDSDB			mMDSDB;
+	TxBlockDB		mTxBlockDB;
 	
 	/**
 	 * For P2P Information
@@ -51,6 +58,16 @@ public class MinimaDB {
 	 * LOCKING the MinimaDB for read write operations..
 	 */
 	ReadWriteLock mRWLock;
+	
+	/**
+	 * The coin Addresses to Notify
+	 */
+	HashSet<String> mCoinNotify;
+	
+	/**
+	 * Do we allow save state
+	 */
+	boolean mAllowSaveState = true;
 	
 	/**
 	 * Main Constructor
@@ -64,10 +81,13 @@ public class MinimaDB {
 		mWallet		= new Wallet();
 		mMaximaDB	= new MaximaDB();
 		mMDSDB   	= new MDSDB();
+		mTxBlockDB	= new TxBlockDB();
 		
 		mP2PDB		= new P2PDB();
 		
-		mRWLock = new ReentrantReadWriteLock();
+		mRWLock 	= new ReentrantReadWriteLock();
+		
+		mCoinNotify	= new HashSet<>();
 	}
 	
 	/**
@@ -96,6 +116,10 @@ public class MinimaDB {
 	 */
 	public TxPoWDB getTxPoWDB() {
 		return mTxPoWDB;
+	}
+	
+	public TxBlockDB getTxBlockDB() {
+		return mTxBlockDB;
 	}
 	
 	public TxPowTree getTxPoWTree() {
@@ -187,14 +211,27 @@ public class MinimaDB {
 			//Get the base Database folder
 			File basedb = getBaseDBFolder();
 			
+			//Load the wallet
+			if(Main.STARTUP_DEBUG_LOGS) {
+				MinimaLogger.log("MinimaDB load Wallet..");
+			}
+			File walletsqlfolder = new File(basedb,"walletsql");
+			if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+				mWallet.loadDB(new File(walletsqlfolder,"wallet"));
+			}else {
+				MinimaLogger.log("Using Encrypted SQL DB");
+				mWallet.loadEncryptedSQLDB(new File(walletsqlfolder,"wallet"),GeneralParams.MAIN_DBPASSWORD);
+			}
+			
 			//Set the Archive folder
+			if(Main.STARTUP_DEBUG_LOGS) {
+				MinimaLogger.log("MinimaDB load ArchiveDB..");
+			}
 			File archsqlfolder = new File(basedb,"archivesql");
 			try {
 				
 				//Try and load the Archive DB
 				mArchive.loadDB(new File(archsqlfolder,"archive"));
-				
-//				throw new Exception("TEST CRASH ARCHIVEDB!");
 				
 			}catch(Exception exc) {
 				
@@ -215,23 +252,15 @@ public class MinimaDB {
 				mArchive.loadDB(new File(archsqlfolder,"archive"));
 			}
 			
-			//Are we Storing in a MySQL..
-			if(!GeneralParams.MYSQL_HOST.equals("")) {
-				mArchive.setupMySQL(
-						GeneralParams.MYSQL_HOST, 
-						GeneralParams.MYSQL_DB,
-						GeneralParams.MYSQL_USER,
-						GeneralParams.MYSQL_PASSWORD);
-			}
-			
 			//Load the SQL DB
+			if(Main.STARTUP_DEBUG_LOGS) {
+				MinimaLogger.log("MinimaDB load TxPoWDB..");
+			}
 			File txpowsqlfolder = new File(basedb,"txpowsql");
 			try {
 				
 				//Try and load the Archive DB
 				mTxPoWDB.loadSQLDB(new File(txpowsqlfolder,"txpow"));
-				
-//				throw new Exception("TEST CRASH TXPOWDB!");
 				
 			}catch(Exception exc) {
 				
@@ -252,19 +281,52 @@ public class MinimaDB {
 				mTxPoWDB.loadSQLDB(new File(txpowsqlfolder,"txpow"));
 			}
 			
-			//Load the wallet
-			File walletsqlfolder = new File(basedb,"walletsql");
-			mWallet.loadDB(new File(walletsqlfolder,"wallet"));
-			
-			//Load the MaximaDB
+			//Load the Maxima DB
+			if(Main.STARTUP_DEBUG_LOGS) {
+				MinimaLogger.log("MinimaDB load MaximaDB..");
+			}
 			File maxsqlfolder = new File(basedb,"maximasql");
-			mMaximaDB.loadDB(new File(maxsqlfolder,"maxima"));
+			try {
+				
+				if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+					mMaximaDB.loadDB(new File(maxsqlfolder,"maxima"));
+				}else {
+					mMaximaDB.loadEncryptedSQLDB(new File(maxsqlfolder,"maxima"),GeneralParams.MAIN_DBPASSWORD);
+				}
+				
+			}catch(Exception exc) {
+				
+				//Log the complete error
+				MinimaLogger.log(exc);
+				
+				//There wqas an issue.. wipe it.. and resync..
+				MinimaLogger.log("ERROR loading MaximaDB.. WIPE and RESTART.. ");
+				
+				//Close the DB
+				mMaximaDB.hardCloseDB();
+				
+				//Delete the ArchiveDB folder
+				MiniFile.deleteFileOrFolder(maxsqlfolder.getAbsolutePath(), maxsqlfolder);
+				
+				//And reload..
+				mMaximaDB	= new MaximaDB();
+				if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+					mMaximaDB.loadDB(new File(maxsqlfolder,"maxima"));
+				}else {
+					mMaximaDB.loadEncryptedSQLDB(new File(maxsqlfolder,"maxima"),GeneralParams.MAIN_DBPASSWORD);
+				}
+			}
 			
-			//Load ther MDS DB
+			//Load the MDS DB
 			File mdssqlfolder = new File(basedb,"mdssql");
-			mMDSDB.loadDB(new File(mdssqlfolder,"mds"));
+			if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+				mMDSDB.loadDB(new File(mdssqlfolder,"mds"));
+			}else {
+				mMDSDB.loadEncryptedSQLDB(new File(mdssqlfolder,"mds"),GeneralParams.MAIN_DBPASSWORD);
+			}
 			
 			//Load the User Prefs
+//			mUserDB.loadEncryptedDB(GeneralParams.MAIN_DBPASSWORD, new File(basedb,"userprefs.db"));
 			mUserDB.loadDB(new File(basedb,"userprefs.db"));
 			
 			//Load the custom Txns..
@@ -275,10 +337,30 @@ public class MinimaDB {
 			mCascade.loadDB(new File(basedb,"cascade.db"));
 			
 			//Load the TxPoWTree
+			File txtree = new File(basedb,"chaintree.db");
+			MinimaLogger.log("Loading TxPowTree size : "+MiniFormat.formatSize(txtree.length()));
 			mTxPoWTree.loadDB(new File(basedb,"chaintree.db"));
 			
-			//And finally..
+			//Load P2P DB
+//			mP2PDB.loadEncryptedDB(GeneralParams.MAIN_DBPASSWORD, new File(basedb,"p2p.db"));
 			mP2PDB.loadDB(new File(basedb,"p2p.db"));
+			
+			//Check YOUR cascade..
+			if(!Cascade.checkCascadeCorrect(mCascade)) {
+				throw new Exception("Your Cascade is BROKEN.. please 'reset' your node.");
+			}
+
+			//And check it ends where the tree ends..
+			if(mCascade.getTip() != null && mTxPoWTree.getRoot()!=null) {
+				MiniNumber cascstart = mCascade.getTip().getTxPoW().getBlockNumber();
+				MiniNumber treeroot  = mTxPoWTree.getRoot().getTxPoW().getBlockNumber();
+				if(!treeroot.isEqual(cascstart.increment())) {
+					throw new Exception("Your Cascade is BROKEN.. please 'reset' your node.");
+				}
+			}
+			
+			//Clean Mem after that
+			System.gc();
 			
 			//Do we need to store the cascade in the ArchiveDB
 			getArchive().checkCascadeRequired(getCascade());
@@ -287,9 +369,16 @@ public class MinimaDB {
 			MinimaLogger.log("SERIOUS ERROR loadAllDB ");
 			MinimaLogger.log(exc);
 			
-			//At this point.. STOP..
-			Runtime.getRuntime().halt(0);
-//			System.exit(1);
+			//Are we on mobile or JNLP
+			if(GeneralParams.IS_MOBILE || GeneralParams.IS_JNLP) {
+			
+				//Set this param
+				Main.getInstance().setStartUpError(true, exc.toString());
+				
+			}else {
+				//At this point.. STOP..
+				Runtime.getRuntime().halt(0);
+			}
 		}
 		
 		//Release the krakken
@@ -306,31 +395,26 @@ public class MinimaDB {
 			//Get the base Database folder
 			File basedb = getBaseDBFolder();
 			
+			//Wallet
+			if(zResetWallet) {
+				mWallet					= new Wallet();
+				File walletsqlfolder 	= new File(basedb,"walletsql");
+				if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+					mWallet.loadDB(new File(walletsqlfolder,"wallet"));
+				}else {
+					mWallet.loadEncryptedSQLDB(new File(walletsqlfolder,"wallet"),GeneralParams.MAIN_DBPASSWORD);
+				}
+			}
+			
 			//Set the Archive folder
 			mArchive			= new ArchiveManager();
 			File archsqlfolder 	= new File(basedb,"archivesql");
 			mArchive.loadDB(new File(archsqlfolder,"archive"));
 			
-			//Are we Storing in a MySQL..
-			if(!GeneralParams.MYSQL_HOST.equals("")) {
-				mArchive.setupMySQL(
-						GeneralParams.MYSQL_HOST, 
-						GeneralParams.MYSQL_DB,
-						GeneralParams.MYSQL_USER,
-						GeneralParams.MYSQL_PASSWORD);
-			}
-			
 			//Load the SQL DB
 			mTxPoWDB			= new TxPoWDB();
 			File txpowsqlfolder = new File(basedb,"txpowsql");
 			mTxPoWDB.loadSQLDB(new File(txpowsqlfolder,"txpow"));
-			
-			//Wallet
-			if(zResetWallet) {
-				mWallet					= new Wallet();
-				File walletsqlfolder 	= new File(basedb,"walletsql");
-				mWallet.loadDB(new File(walletsqlfolder,"wallet"));
-			}
 			
 		}catch(Exception exc) {
 			MinimaLogger.log("SERIOUS ERROR loadArchiveAndTxPoWDB");
@@ -341,31 +425,85 @@ public class MinimaDB {
 		writeLock(false);
 	}
 	
-	public void saveAllDB() {
-		//First the SQL
-		saveSQL();
+	public void loadDBsForRestoreSync() {
 		
-		//And the rest
-		saveState();
+		//We need read lock 
+		writeLock(true);
+		
+		try {
+			
+			//Get the base Database folder
+			File basedb = getBaseDBFolder();
+			
+			//Wallet
+			mWallet					= new Wallet();
+			File walletsqlfolder 	= new File(basedb,"walletsql");
+			if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+				mWallet.loadDB(new File(walletsqlfolder,"wallet"));
+			}else {
+				mWallet.loadEncryptedSQLDB(new File(walletsqlfolder,"wallet"),GeneralParams.MAIN_DBPASSWORD);
+			}
+			
+			//Set the Archive folder
+			mArchive			= new ArchiveManager();
+			File archsqlfolder 	= new File(basedb,"archivesql");
+			mArchive.loadDB(new File(archsqlfolder,"archive"));
+			
+			//Load the SQL DB
+			mTxPoWDB			= new TxPoWDB();
+			File txpowsqlfolder = new File(basedb,"txpowsql");
+			mTxPoWDB.loadSQLDB(new File(txpowsqlfolder,"txpow"));
+			
+			//Load the Cascade
+			mCascade = new Cascade();
+			mCascade.loadDB(new File(basedb,"cascade.db"));
+			
+			//Load the TxPoWTree
+			mTxPoWTree = new TxPowTree();
+			mTxPoWTree.loadDB(new File(basedb,"chaintree.db"));
+			
+		}catch(Exception exc) {
+			MinimaLogger.log("SERIOUS ERROR loadDBsForRestoreSync");
+			MinimaLogger.log(exc);
+		}
+		
+		//Release the krakken
+		writeLock(false);
 	}
 	
-	public void saveSQL() {
+	public void saveAllDB() {
+		saveAllDB(false);
+	}
+	
+	public void saveAllDB(boolean zCompact) {
+		MinimaLogger.log("Saving State..");
+		saveState();
+		
+		MinimaLogger.log("Saving SQL..");
+		saveSQL(zCompact);
+		
+		MinimaLogger.log("All saved..");
+	}
+	
+	public void saveSQL(boolean zCompact) {
 		
 		//We need lock 
 		writeLock(true);
 		
 		try {
 			//Clean shutdown of SQL DBs
-			MinimaLogger.log("TxPowDB shutdown..");
-			mTxPoWDB.saveDB();
-			MinimaLogger.log("ArchiveDB shutdown..");
-			mArchive.saveDB();
 			MinimaLogger.log("Wallet shutdown..");
-			mWallet.saveDB();
+			mWallet.saveDB(true);
 			MinimaLogger.log("Maxima shutdown..");
-			mMaximaDB.saveDB();
+			mMaximaDB.saveDB(zCompact);
 			MinimaLogger.log("MDSDB shutdown..");
-			mMDSDB.saveDB();
+			mMDSDB.saveDB(zCompact);
+			MinimaLogger.log("TxPowDB shutdown..");
+			mTxPoWDB.saveDB(zCompact);
+			MinimaLogger.log("ArchiveDB shutdown..");
+			mArchive.saveDB(zCompact);
+			
+			MinimaLogger.log("All DB Shutdown..");
 			
 		}catch(Exception exc) {
 			MinimaLogger.log(exc);
@@ -375,23 +513,72 @@ public class MinimaDB {
 		writeLock(false);
 	}
 	
-	public void saveWalletSQL() {
+	public void fullDBRestartMemFree() {
 		
 		//We need lock 
 		writeLock(true);
-		
+				
 		try {
-			mWallet.saveDB();
 			
-		}catch(Exception exc) {
-			MinimaLogger.log(exc);
+			//MinimaLogger.log("Memory clear started..");
+			
+			//Get the base Database folder
+			File basedb = getBaseDBFolder();
+			
+			//Wipe the old data..
+			mTxPoWDB.wipeDBRAM();
+			mTxPoWDB.getSQLDB().cleanDB(true);
+			mArchive.checkForCleanDB();
+			
+			//Shut them down
+			//MinimaLogger.log("Save TxPoWDB..");
+			mTxPoWDB.saveDB(false);
+			//MinimaLogger.log("Save ArchiveDB..");
+			mArchive.saveDB(false);
+			//MinimaLogger.log("Save WalletDB..");
+			mWallet.saveDB(false);
+			
+			//MinimaLogger.log("Load DBs..");
+			
+			//Wallet
+			mWallet					= new Wallet();
+			File walletsqlfolder 	= new File(basedb,"walletsql");
+			if(!GeneralParams.IS_MAIN_DBPASSWORD_SET) {
+				mWallet.loadDB(new File(walletsqlfolder,"wallet"));
+			}else {
+				mWallet.loadEncryptedSQLDB(new File(walletsqlfolder,"wallet"),GeneralParams.MAIN_DBPASSWORD);
+			}
+			
+			//Set the Archive folder
+			mArchive			= new ArchiveManager();
+			File archsqlfolder 	= new File(basedb,"archivesql");
+			mArchive.loadDB(new File(archsqlfolder,"archive"));
+			
+			//Load the SQL DB
+			mTxPoWDB			= new TxPoWDB();
+			File txpowsqlfolder = new File(basedb,"txpowsql");
+			mTxPoWDB.loadSQLDB(new File(txpowsqlfolder,"txpow"));
+			
+			//MinimaLogger.log("Memory clear finished..");
+			
+		} catch (SQLException e) {
+			e.printStackTrace();
 		}
 		
 		//Release the krakken
 		writeLock(false);
 	}
 	
+	public void setAllowSaveState(boolean zAllow) {
+		mAllowSaveState = zAllow;
+	}
+	
 	public void saveState() {
+		
+		//Are we allowed..
+		if(!mAllowSaveState) {
+			return; 
+		}
 		
 		//We need read lock 
 		readLock(true);
@@ -402,7 +589,14 @@ public class MinimaDB {
 			
 			//JsonDBs
 			mTxnDB.saveDB();
+//			mUserDB.saveEncryptedDB(GeneralParams.MAIN_DBPASSWORD, new File(basedb,"userprefs.db"));
+//			mP2PDB.saveEncryptedDB(GeneralParams.MAIN_DBPASSWORD, new File(basedb,"p2p.db"));
+			
+			//MinimaLogger.log("SAVESTATE USERDB:"+mUserDB.getAllData().toString());
 			mUserDB.saveDB(new File(basedb,"userprefs.db"));
+			
+			
+			//MinimaLogger.log("SAVE P2P DB.. "+mP2PDB.getPeersList().size());
 			mP2PDB.saveDB(new File(basedb,"p2p.db"));
 			
 			//Custom
@@ -419,6 +613,11 @@ public class MinimaDB {
 	
 	public void saveUserDB() {
 		
+		//Are we allowed..
+		if(!mAllowSaveState) {
+			return; 
+		}
+		
 		//We need read lock 
 		readLock(true);
 		
@@ -427,6 +626,9 @@ public class MinimaDB {
 			File basedb = getBaseDBFolder();
 			
 			//JsonDBs
+//			mUserDB.saveEncryptedDB(GeneralParams.MAIN_DBPASSWORD, new File(basedb,"userprefs.db"));
+			
+			//MinimaLogger.log("SAVEUSERDB USERDB:"+mUserDB.getAllData().toString());
 			mUserDB.saveDB(new File(basedb,"userprefs.db"));
 			
 		}catch(Exception exc) {
@@ -435,5 +637,47 @@ public class MinimaDB {
 		
 		//Release the krakken
 		readLock(false);
+	}
+	
+	public void saveP2PDB() {
+		
+		//Are we allowed..
+		if(!mAllowSaveState) {
+			return; 
+		}
+		
+		//We need read lock 
+		readLock(true);
+		
+		try {
+			//Get the base Database folder
+			File basedb = getBaseDBFolder();
+			
+			//JsonDBs
+			mP2PDB.saveDB(new File(basedb,"p2p.db"));
+			
+		}catch(Exception exc) {
+			MinimaLogger.log(exc);
+		}
+		
+		//Release the krakken
+		readLock(false);
+	}
+	
+	/**
+	 * Coin Notification
+	 * 
+	 * Different to tracking as can be any coin without the script
+	 */
+	public void addCoinNotify(String zAddress) {
+		mCoinNotify.add(zAddress);
+	}
+	
+	public boolean removeCoinNotify(String zAddress) {
+		return mCoinNotify.remove(zAddress);
+	}
+	
+	public boolean checkCoinNotify(String zAddress) {
+		return mCoinNotify.contains(zAddress);
 	}
 }

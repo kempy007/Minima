@@ -10,24 +10,27 @@ import static org.minima.system.params.ParamConfigurer.ParamKeys.toParamKey;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.StringTokenizer;
 import java.util.function.BiConsumer;
 
+import org.minima.objects.base.MiniNumber;
 import org.minima.system.network.p2p.P2PFunctions;
 import org.minima.system.network.p2p.params.P2PParams;
 import org.minima.utils.MinimaLogger;
+import org.minima.utils.RPCClient;
 
 public class ParamConfigurer {
 
     private final Map<ParamKeys, String> paramKeysToArg = new HashMap<>();
     private boolean daemon = false;
-    private boolean rpcenable = false;
+    //private boolean rpcenable = false;
     private boolean mShutdownhook = true;
-    private boolean mUseMySQL= false;
     
     public ParamConfigurer usingConfFile(String[] programArgs) {
         List<String> zArgsList = Arrays.asList(programArgs);
@@ -64,7 +67,7 @@ public class ParamConfigurer {
                 .collect(toMap(
                         entry -> entry.getKey().toLowerCase().replaceFirst("minima_", ""),
                         entry -> ofNullable(entry.getValue())
-                                .map(String::toLowerCase)
+                                //.map(String::toLowerCase)
                                 .orElse("")))
                 .entrySet().stream()
                 .filter(e -> toParamKey(e.getKey()).isPresent())
@@ -123,29 +126,57 @@ public class ParamConfigurer {
         return daemon;
     }
 
-    public boolean isRpcenable() {
-        return rpcenable;
+    public static boolean checkParams(String zFullParams) {
+    	
+    	//Break it up
+    	StringTokenizer strtok = new StringTokenizer(zFullParams," ");
+    	ArrayList<String> args = new ArrayList<>();
+    	while(strtok.hasMoreTokens()) {
+    		String tok = strtok.nextToken().trim();
+    		if(!tok.equals("")) {
+    			args.add(tok);
+    		}
+    	}
+    	
+    	//Convert to an array..
+    	String[] allargs = args.toArray(new String[0]);
+    	
+    	return checkParams(allargs);
+    }
+    
+    public static boolean checkParams(String[] zParams) {
+    	
+    	//Run through Params
+		ParamConfigurer configurer = null;
+		try {
+			configurer = new ParamConfigurer().usingProgramArgs(zParams).configure();
+		} catch (Exception ex) {
+			return false;
+		}
+    	
+    	return true;
     }
     
     public boolean isShutDownHook() {
         return mShutdownhook;
     }
     
-    public boolean isMySQLRequired() {
-    	return mUseMySQL;
-    }
-
     enum ParamKeys {
-    	data("data", "Specify the data folder (defaults to .minima/ under user home", (args, configurer) -> {
+    	data("data", "Specify the data folder ( defaults to ~/.minima )", (args, configurer) -> {
+    		
     		//Get that folder
-    		File dataFolder 	= new File(args);
-    				
+    		File dataFolder = new File(args);
+    		
     		//Depends on the Base Minima Version
     		File minimafolder 	= new File(dataFolder,GlobalParams.MINIMA_BASE_VERSION);
     		minimafolder.mkdirs();
     		
     		//Set this globally
     		GeneralParams.DATA_FOLDER 	= minimafolder.getAbsolutePath();
+        }),
+    	dbpassword("dbpassword", "Main Wallet / SQL AES password - MUST be specified on first launch. CANNOT be changed later.", (args, configurer) -> {
+    		GeneralParams.IS_MAIN_DBPASSWORD_SET = true;
+    		GeneralParams.MAIN_DBPASSWORD 		 = args;
         }),
     	basefolder("basefolder", "Specify a default file creation / backup / restore folder", (args, configurer) -> {
     		//Get that folder
@@ -169,17 +200,48 @@ public class ParamConfigurer {
         }),
         rpcenable("rpcenable", "Enable rpc", (args, configurer) -> {
             if ("true".equals(args)) {
-                configurer.rpcenable = true;
+                GeneralParams.RPC_ENABLED = true;
+            }else {
+            	GeneralParams.RPC_ENABLED = false;
+            }
+        }),
+        rpcpassword("rpcpassword", "Set Basic Auth password for RPC calls ( Use with SSL / stununel )", (args, configurer) -> {
+        	GeneralParams.RPC_PASSWORD 		= args;
+        	GeneralParams.RPC_AUTHENTICATE 	= true;
+        }),
+        rpcssl("rpcssl", "Use Self Signed SSL cert to run RPC", (args, configurer) -> {
+            if ("true".equals(args)) {
+                GeneralParams.RPC_SSL = true;
+            }else {
+            	GeneralParams.RPC_SSL = false;
+            }
+        }),
+        rpccrlf("rpccrlf", "Use CRLF at the end of the RPC headers (NodeJS)", (args, configurer) -> {
+            if ("true".equals(args)) {
+                GeneralParams.RPC_CRLF = true;
+            }else {
+            	GeneralParams.RPC_CRLF = false;
             }
         }),
         allowallip("allowallip", "Allow all IP for Maxima / Networking", (args, configurer) -> {
             if ("true".equals(args)) {
             	GeneralParams.ALLOW_ALL_IP = true;
+            }else {
+            	GeneralParams.ALLOW_ALL_IP = false;
+            }
+        }),
+        archive("archive", "Run an Archive node - store all data / cascade for resync", (args, configurer) -> {
+            if ("true".equals(args)) {
+            	GeneralParams.ARCHIVE = true;
+            }else {
+            	GeneralParams.ARCHIVE = false;
             }
         }),
         mdsenable("mdsenable", "Enable MDS", (args, configurer) -> {
             if ("true".equals(args)) {
             	GeneralParams.MDS_ENABLED = true;
+            }else {
+            	GeneralParams.MDS_ENABLED = false;
             }
         }),
         mdspassword("mdspassword", "Specify the Minima MDS password", (arg, configurer) -> {
@@ -192,7 +254,7 @@ public class ParamConfigurer {
     		
         	GeneralParams.MDS_INITFOLDER= initFolder.getAbsolutePath();
         }),
-        mdswrite("mdswrite", "Make an init MiniDAPP WRITE access", (arg, configurer) -> {
+        mdswrite("mdswrite", "Make an initial MiniDAPP WRITE access", (arg, configurer) -> {
         	GeneralParams.MDS_WRITE= arg;
         }),
         conf("conf", "Specify a configuration file (absolute)", (args, configurer) -> {
@@ -210,18 +272,24 @@ public class ParamConfigurer {
         }),
         desktop("desktop", "Use Desktop settings - this node can't accept incoming connections", (args, configurer) -> {
             if ("true".equals(args)) {
-                GeneralParams.IS_ACCEPTING_IN_LINKS = false;
+            	GeneralParams.IS_DESKTOP 			= true;
+            	GeneralParams.IS_ACCEPTING_IN_LINKS = false;
             }
         }),
         server("server", "Use Server settings - this node can accept incoming connections", (args, configurer) -> {
-        	GeneralParams.IS_ACCEPTING_IN_LINKS = true;
-//        	if ("true".equals(args)) {
-//                GeneralParams.IS_ACCEPTING_IN_LINKS = false;
-//            }
+        	if ("true".equals(args)) {
+                GeneralParams.IS_ACCEPTING_IN_LINKS = true;
+            }
         }),
         mobile("mobile", "Sets this device to a mobile device - used for metrics only", (args, configurer) -> {
             if ("true".equals(args)) {
-                GeneralParams.IS_MOBILE = true;
+            	GeneralParams.IS_ACCEPTING_IN_LINKS = false;
+                GeneralParams.IS_MOBILE 			= true;
+            }
+        }),
+        jnlp("jnlp", "Are we running from the JNLP", (args, configurer) -> {
+            if ("true".equals(args)) {
+            	GeneralParams.IS_JNLP = true;
             }
         }),
         showparams("showparams", "Show startup params on launch", (args, configurer) -> {
@@ -230,33 +298,44 @@ public class ParamConfigurer {
             }
         }),
         nop2p("nop2p", "Disable the automatic P2P system", (args, configurer) -> {
-            GeneralParams.P2P_ENABLED = false;
+        	if ("true".equals(args)) {
+        		GeneralParams.P2P_ENABLED = false;
+            }
         }),
         noshutdownhook("noshutdownhook", "Do not use the shutdown hook (Android)", (args, configurer) -> {
         	configurer.mShutdownhook = false;
         }),
-        noconnect("noconnect", "Stops the P2P system from connecting to other nodes until it's been connected too", (args, configurer) -> {
+        noconnect("noconnect", "Stops the P2P system from connecting to other nodes until it's been connected to", (args, configurer) -> {
             if ("true".equals(args)) {
                 GeneralParams.NOCONNECT = true;
             }
         }),
-        p2pnode("p2pnode", "Specify the initial P2P host:port list to connect to", (args, configurer) -> {
+        p2prootnode("p2prootnode", "Specify the initial P2P host:port to connect to", (args, configurer) -> {
             GeneralParams.P2P_ROOTNODE = args;
+        }),
+        p2pnodes("p2pnodes", "Specify a list of nodes (or an URL to a file with the list) to use IF your peers list is empty", (args, configurer) -> {
+            
+        	//Is it an URL
+        	if(args.startsWith("http")) {
+        		
+        		//Load the list..
+        		try {
+					GeneralParams.P2P_ADDNODES = RPCClient.sendGET(args);
+				} catch (IOException e) {
+					MinimaLogger.log("Error trying -p2pnodes URL:"+args+" "+e.toString());
+				}
+				
+        	}else {
+        		GeneralParams.P2P_ADDNODES = args;
+        	}
+        	
         }),
         p2ploglevelinfo("p2p-log-level-info", "Set the P2P log level to info", (args, configurer) -> {
             P2PParams.LOG_LEVEL = P2PFunctions.Level.INFO;
         }),
-        p2plogleveldebug("p2p-log-level-debug", "Set the P2P log level to info", (args, configurer) -> {
+        p2plogleveldebug("p2p-log-level-debug", "Set the P2P log level to debug", (args, configurer) -> {
             P2PParams.LOG_LEVEL = P2PFunctions.Level.DEBUG;
         }),
-//        automine("automine", "Simulate user traffic to construct the blockchain", (args, configurer) -> {
-//            if ("true".equals(args)) {
-//                GeneralParams.AUTOMINE = true;
-//            }
-//        }),
-//        noautomine("noautomine", "Do not simulate user traffic to construct the blockchain", (args, configurer) -> {
-//            GeneralParams.AUTOMINE = false;
-//        }),
         connect("connect", "Disable the p2p and manually connect to this list of host:port", (args, configurer) -> {
             GeneralParams.P2P_ENABLED = false;
             GeneralParams.CONNECT_LIST = args;
@@ -266,50 +345,65 @@ public class ParamConfigurer {
                 GeneralParams.CLEAN = true;
             }
         }),
+        nodefaultminidapps("nodefaultminidapps", "Do NOT install the default MiniDAPPs", (args, configurer) -> {
+            if ("true".equals(args)) {
+                GeneralParams.DEFAULT_MINIDAPPS = false;
+            }
+        }),
         nosyncibd("nosyncibd", "Do not sync IBD (for testing)", (args, configurer) -> {
             if ("true".equals(args)) {
                 GeneralParams.NO_SYNC_IBD = true;
             }
         }),
-        mysqlhost("mysqlhost", "Store all archive data in a MySQL DB", (args, configurer) -> {
-            GeneralParams.MYSQL_HOST = args;
-            configurer.mUseMySQL = true;
-        }),
-        mysqldb("mysqldb", "The MySQL Database", (args, configurer) -> {
-        	GeneralParams.MYSQL_DB = args;
-        	configurer.mUseMySQL = true;
-        }),
-        mysqluser("mysqluser", "The MySQL User", (args, configurer) -> {
-        	GeneralParams.MYSQL_USER = args;
-        	configurer.mUseMySQL = true;
-        }),
-        mysqlpassword("mysqlpassword", "The MySQL Password", (args, configurer) -> {
-        	GeneralParams.MYSQL_PASSWORD = args;
-        	configurer.mUseMySQL = true;
+//        slavenode("slavenode", "Connect to this node only and only accept TxBlock messages.", (args, configurer) -> {
+//        	GeneralParams.CONNECT_LIST 			= args;
+//        	GeneralParams.P2P_ENABLED 			= false;
+//            GeneralParams.TXBLOCK_NODE 			= true;
+//            GeneralParams.NO_SYNC_IBD 			= true;
+//            GeneralParams.IS_ACCEPTING_IN_LINKS = false;
+//        }),
+        limitbandwidth("limitbandwidth", "Limit the amount sent for archive sync", (args, configurer) -> {
+            if ("true".equals(args)) {
+                GeneralParams.ARCHIVESYNC_LIMIT_BANDWIDTH = true;
+            }
         }),
         genesis("genesis", "Create a genesis block, -clean and -automine", (args, configurer) -> {
             if ("true".equals(args)) {
                 GeneralParams.CLEAN = true;
-//                GeneralParams.PRIVATE_NETWORK = true;
                 GeneralParams.GENESIS = true;
-//                GeneralParams.AUTOMINE = true;
             }
         }),
         test("test", "Use test params on a private network", (args, configurer) -> {
             if ("true".equals(args)) {
                 GeneralParams.TEST_PARAMS 		= true;
-//                GeneralParams.PRIVATE_NETWORK 	= true;
-//                GeneralParams.P2P_ENABLED 		= false;
                 TestParams.setTestParams();
             }
         }),
+        solo("solo", "Run a solo/private network (-test -nop2p) and will run -genesis ONLY the first time", (args, configurer) -> {
+            if ("true".equals(args)) {
+                GeneralParams.PRIVATE 		= true;
+                GeneralParams.TEST_PARAMS 	= true;
+                TestParams.setTestParams();
+                GeneralParams.P2P_ENABLED 	= false;
+            }
+        }),
+        testchainlength("testchainlength", "Specify length of tree to keep in -test mode (default is 32)", (arg, configurer) -> {
+            TestParams.MINIMA_CASCADE_START_DEPTH 	= new MiniNumber(arg.trim());
+            if(GeneralParams.TEST_PARAMS) {
+            	TestParams.setTestParams();
+            }
+        }),
+        
         help("help", "Print this help", (args, configurer) -> {
             System.out.println("Minima Help");
             stream(values())
                     .forEach(pk -> System.out.format("%-20s%-15s%n", new Object[] {"-" + pk.key,pk.helpMsg}));
             System.exit(1);
+        }),
+    	seed("seed", "Use this seed phrase if starting a new node", (args, configurer) -> {
+            GeneralParams.SEED_PHRASE = args;
         });
-
+    	
         private final String key;
         private String helpMsg;
         private final BiConsumer<String, ParamConfigurer> consumer;

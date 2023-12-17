@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.Iterator;
 
-import org.minima.database.MinimaDB;
 import org.minima.objects.base.MiniString;
 import org.minima.system.Main;
 import org.minima.system.commands.Command;
@@ -20,6 +19,11 @@ import org.minima.utils.json.JSONObject;
 
 public class Minima {
 
+	private static InputStreamReader mInputStream = null;
+	private static BufferedReader mBufferedStream = null;
+    
+	private static boolean mIsRunning = true;
+	
 	public Minima() {}
 	
 	/**
@@ -85,15 +89,22 @@ public class Minima {
 	 */
 	public static void main(String[] zArgs) {
 		
+		//we are running
+		mIsRunning = true;
+		
 		//Set the main data folder
 		File dataFolder 	= new File(System.getProperty("user.home"),".minima");
 		
 		//Depends on the VERSION
 		File minimafolder 			= new File(dataFolder,GlobalParams.MINIMA_BASE_VERSION);
 		
+		//Reset ALL the GeneralParams - ANDROID KEEPS THEM after a shutdown
+		GeneralParams.resetDefaults();
+		
 		//Set this globally
 		GeneralParams.DATA_FOLDER 	= minimafolder.getAbsolutePath();
-
+		
+		//Run Params configure
 		ParamConfigurer configurer = null;
 		try {
 			configurer = new ParamConfigurer()
@@ -111,18 +122,8 @@ public class Minima {
 		maindata.mkdirs();
 		
 		boolean daemon 			= configurer.isDaemon();
-		boolean rpcenable 		= configurer.isRpcenable();
 		boolean shutdownhook 	= configurer.isShutDownHook();
 
-		//Are we integrating MySQL
-		if(configurer.isMySQLRequired()) {
-			try {
-				Class.forName("com.mysql.cj.jdbc.Driver");
-			} catch (ClassNotFoundException e1) {
-				e1.printStackTrace();
-			}
-		}
-		
 		//Set the Ports.. If Minima port has changed
 		GeneralParams.MDSFILE_PORT 		= GeneralParams.MINIMA_PORT+2;
 		GeneralParams.MDSCOMMAND_PORT 	= GeneralParams.MINIMA_PORT+3;
@@ -138,14 +139,15 @@ public class Minima {
 		MinimaLogger.log("**********************************************");
 		MinimaLogger.log("Welcome to Minima v"+GlobalParams.MINIMA_VERSION+" - for assistance type help. Then press enter.");
 		
+		//Load the required MySQL classes
+		try {
+			Class.forName("com.mysql.cj.jdbc.Driver");
+		} catch (ClassNotFoundException e1) {
+			//e1.printStackTrace();
+		}
+		
 		//Main handler..
 		Main main = new Main();
-
-		//Are we enabling RPC..
-		if(rpcenable) {
-			MinimaDB.getDB().getUserDB().setRPCEnabled(true);
-			main.getNetworkManager().startRPC();
-		}
 		
 		//A shutdown hook..
 		if(shutdownhook) {
@@ -157,7 +159,7 @@ public class Minima {
 						return;
 					}
 					
-					//Shutdowen hook called..
+					//Shutdown hook called..
 					MinimaLogger.log("[!] Shutdown Hook..");
 					
 					//Shut down the whole system
@@ -180,14 +182,14 @@ public class Minima {
 	    }
 		
 		//Listen for input
-		InputStreamReader is    = new InputStreamReader(System.in, MiniString.MINIMA_CHARSET);
-	    BufferedReader bis      = new BufferedReader(is);
+		mInputStream    = new InputStreamReader(System.in, MiniString.MINIMA_CHARSET);
+	    mBufferedStream = new BufferedReader(mInputStream);
 	    
 	    //Loop until finished..
-	    while(main.isRunning()){
+	    while(mIsRunning && main.isRunning()){
 	        try {
 	            //Get a line of input
-	            String input = bis.readLine();
+	            String input = mBufferedStream.readLine();
 	            
 	            //Check valid..
 	            if(input!=null && !input.equals("")) {
@@ -225,8 +227,8 @@ public class Minima {
 	    
 	    //Cross the streams..
 	    try {
-	        bis.close();
-	        is.close();
+	        mBufferedStream.close();
+	        mInputStream.close();
 	    } catch (IOException ex) {
 	    	MinimaLogger.log(""+ex);
 	    }

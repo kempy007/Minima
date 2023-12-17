@@ -17,6 +17,7 @@ import org.minima.objects.base.MiniData;
 import org.minima.objects.keys.Signature;
 import org.minima.system.commands.Command;
 import org.minima.system.commands.CommandException;
+import org.minima.system.commands.backup.vault;
 import org.minima.utils.MiniFile;
 import org.minima.utils.json.JSONObject;
 
@@ -28,7 +29,36 @@ public class sendsign extends Command {
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"file"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"file","password"}));
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\nsendsign\n"
+				+ "\n"
+				+ "Sign a transaction previously created by the 'sendnosign' command, by specifying its .txn file.\n"
+				+ "\n"
+				+ "Optionally, if the node is Vault password locked, provide the Vault password to decrypt the keys for signing,\n"
+				+ "\n"
+				+ "the keys will be automatically re-encrypted after signing.\n"
+				+ "\n"
+				+ "Can be signed on an offline node, then posted from an online node.\n"
+				+ "\n"
+				+ "Outputs a new .txn file for the signed txn, to be posted with the 'sendpost' command.\n"
+				+ "\n"
+				+ "file:\n"
+				+ "    Name of the unsigned transaction (.txn) file to sign, located in the node's base folder.\n"
+				+ "    If not in the base folder, specify the full file path.\n"
+				+ "\n"
+				+ "password:\n"
+				+ "    The Vault password, if the node is password locked.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "sendsign file:unsignedtransaction-1674907380057.txn\n"
+				+ "\n"
+				+ "sendsign file:C:\\Users\\unsignedtransaction-1674907380057.txn password:your_vaultpassword\n"
+				+ "\n";
 	}
 	
 	@Override
@@ -51,6 +81,16 @@ public class sendsign extends Command {
 		
 		//Create a list of the required signatures
 		ArrayList<String> reqsigs = new ArrayList<>();
+		
+		boolean passwordlock = false;
+		if(existsParam("password") && !MinimaDB.getDB().getWallet().isBaseSeedAvailable()) {
+			
+			//Lets unlock the DB
+			vault.passowrdUnlockDB(getParam("password"));
+			 
+			//Lock at the end..
+			passwordlock = true;
+		}
 		
 		//Get the sigs required.. for the main transaction
 		Transaction trans 	= txp.getTransaction();
@@ -107,6 +147,15 @@ public class sendsign extends Command {
 				witness.addSignature(signature);
 			}	
 		}
+		
+		//Are we locking the DB
+		if(passwordlock) {
+			//Lock the Wallet DB
+			vault.passwordLockDB(getParam("password"));
+		}
+		
+		//Calculate the TxPOWID
+		txp.calculateTXPOWID();
 		
 		//Create the file..
 		File txnfile = MiniFile.createBaseFile("signedtransaction-"+System.currentTimeMillis()+".txn");

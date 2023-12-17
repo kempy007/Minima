@@ -7,32 +7,13 @@ import org.minima.objects.base.MiniData;
 import org.minima.objects.base.MiniNumber;
 import org.minima.system.params.GlobalParams;
 import org.minima.utils.JsonDB;
+import org.minima.utils.MiniUtil;
 import org.minima.utils.json.JSONArray;
-import org.minima.utils.json.JSONObject;
 
 public class UserDB extends JsonDB{
 
 	public UserDB() {
 		super();
-	}
-	
-	/**
-	 * The BASE private seed key modifier
-	 */
-	public String getBasePrivateSeed() {
-		return getString("baseprivateseed", "");
-	}
-	
-	public void setBasePrivateSeed(String zBaseSeed) {
-		setString("baseprivateseed", zBaseSeed);
-	}
-	
-	public void setBasePrivatePhrase(String zBasePhrase) {
-		setString("baseprivatephrase", zBasePhrase);
-	}
-	
-	public String getBasePrivatePhrase() {
-		return getString("baseprivatephrase", "");
 	}
 	
 	/**
@@ -47,18 +28,6 @@ public class UserDB extends JsonDB{
 	}
 	
 	/**
-	 * Is RPC Enabled on this system..
-	 */
-	public boolean isRPCEnabled() {
-		return getBoolean("rpcenable", false);
-	}
-	
-	public void setRPCEnabled(boolean zEnabled) {
-		setBoolean("rpcenable", zEnabled);
-	}
-	
-
-	/**
 	 * The Incentive Cash User
 	 */
 	public String getIncentiveCashUserID() {
@@ -69,25 +38,6 @@ public class UserDB extends JsonDB{
 		setString("uid", zUID);
 	}
 	
-	/**
-	 * SSH Tunnel settings
-	 */
-	public boolean isSSHTunnelEnabled() {
-		return getBoolean("sshenabled", false);
-	}
-	
-	public void setSSHTunnelEnabled(boolean zEnabled) {		
-		setBoolean("sshenabled", zEnabled);
-	}	
-	
-	public void setSSHTunnelSettings(JSONObject zSettings) {
-		setJSON("sshtunnelsettings", zSettings);
-	}
-	
-	public JSONObject getSSHTunnelSettings() {
-		return getJSON("sshtunnelsettings", new JSONObject());
-	}
-
 	/**
 	 * Web Hooks
 	 */
@@ -197,6 +147,106 @@ public class UserDB extends JsonDB{
 	
 	public void setMagicMaxTxns(MiniNumber zMaxTxns) {
 		setNumber("magic_txns", zMaxTxns);
+	}
+	
+	/**
+	 * Encrypted version of Seed phrase
+	 */
+	public void setEncryptedSeed(MiniData zEncryptedSeed) {
+		setData("encrypted_seed", zEncryptedSeed);
+	}
+	
+	public MiniData getEncryptedSeed() {
+		return getData("encrypted_seed", MiniData.ZERO_TXPOWID);
+	}
+	
+	/**
+	 * MAXIMA - settings
+	 */
+	public boolean getMaximaAllowContacts() {
+		return getBoolean("maxima_allowallcontacts", true);
+	}
+	
+	public void setMaximaAllowContacts(boolean zAllowContacts) {
+		setBoolean("maxima_allowallcontacts", zAllowContacts);
+	}
+	
+	public ArrayList<String> getMaximaPermanent() {
+		return MiniUtil.convertJSONArray(getJSONArray("maxima_permanent")) ;
+	}
+	
+	public void setMaximaPermanent(ArrayList<String> zPermanentList) {
+		setJSONArray("maxima_permanent",MiniUtil.convertArrayList(zPermanentList));
+	}
+	
+	/**
+	 * Are we auto backing up the MySQLDB
+	 */
+	public boolean getAutoBackupMySQL() {
+		return getBoolean("mysql_autobackup", false);
+	}
+	
+	public void setAutoBackupMySQL(boolean zAuto) {
+		setBoolean("mysql_autobackup", zAuto);
+	}
+	
+	public void setAutoMySQLHost(String zHost) {
+		setString("mysql_host", zHost);
+	}
+	
+	public String getAutoMySQLHost() {
+		return getString("mysql_host","");
+	}
+	
+	public void setAutoMySQLDB(String zDB) {
+		setString("mysql_db", zDB);
+	}
+	
+	public String getAutoMySQLDB() {
+		return getString("mysql_db","");
+	}
+	
+	public void setAutoMySQLUser(String zUser) {
+		setString("mysql_user", zUser);
+	}
+	
+	public String getAutoMySQLUser() {
+		return getString("mysql_user","");
+	}
+	
+	public void setAutoMySQLPassword(String zPassword) {
+		setString("mysql_password", zPassword);
+	}
+	
+	public String getAutoMySQLPassword() {
+		return getString("mysql_password","");
+	}
+	
+	/**
+	 * Slave Node properties..
+	 */
+	public boolean isSlaveNode() {
+		return getBoolean("slavenode_enabled", false);
+	}
+	
+	public String getSlaveNodeHost() {
+		return getString("slavenode_host", "");
+	}
+	
+	public void setSlaveNode(boolean zEnabled, String zHost) {
+		setBoolean("slavenode_enabled", zEnabled);
+		setString("slavenode_host", zHost);
+	}
+	
+	/**
+	 * Default MiniHUB
+	 */
+	public String getDefaultMiniHUB() {
+		return getString("minihub_default", "0x00");
+	}
+	
+	public void setDefaultMiniHUB(String zMiniDAPPID) {
+		setString("minihub_default", zMiniDAPPID);
 	}
 	
 }

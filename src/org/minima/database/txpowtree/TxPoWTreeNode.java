@@ -12,6 +12,7 @@ import org.minima.database.mmr.MMRData;
 import org.minima.database.mmr.MMREntry;
 import org.minima.database.mmr.MMREntryNumber;
 import org.minima.database.mmr.MMRProof;
+import org.minima.database.txpowdb.TxPoWDB;
 import org.minima.database.wallet.Wallet;
 import org.minima.objects.Coin;
 import org.minima.objects.CoinProof;
@@ -22,9 +23,9 @@ import org.minima.objects.base.MiniData;
 import org.minima.objects.base.MiniNumber;
 import org.minima.system.Main;
 import org.minima.system.brains.TxPoWSearcher;
-import org.minima.utils.Crypto;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.Streamable;
+import org.minima.utils.json.JSONObject;
 
 public class TxPoWTreeNode implements Streamable {
 
@@ -68,6 +69,11 @@ public class TxPoWTreeNode implements Streamable {
 	 */
 	ArrayList<Coin> 	mComputedRelevantCoins = new ArrayList<>();
 	
+	/**
+	 * Have we checked we have all the txns in this block
+	 */
+	boolean mHaveCheckedFull = false;
+	
 	private TxPoWTreeNode() {}
 	
 	public TxPoWTreeNode(TxBlock zTxBlock) {
@@ -75,10 +81,11 @@ public class TxPoWTreeNode implements Streamable {
 	}
 	
 	public TxPoWTreeNode(TxBlock zTxBlock, boolean zFindRelevant) {
-		mTxBlock		= zTxBlock;
-		mChildren 	 	= new ArrayList<>();
-		mTotalWeight 	= BigDecimal.ZERO;
-		mParent			= null;
+		mTxBlock			= zTxBlock;
+		mChildren 	 		= new ArrayList<>();
+		mTotalWeight 		= BigDecimal.ZERO;
+		mParent				= null;
+		mHaveCheckedFull 	= false;
 		
 		//Construct the MMR..
 		constructMMR(zFindRelevant);
@@ -106,7 +113,10 @@ public class TxPoWTreeNode implements Streamable {
 		mMMR.setBlockTime(block);
 		
 		//Get the Wallet..
-		Wallet wallet = MinimaDB.getDB().getWallet();
+		Wallet wallet = null;
+		if(zFindRelevant){
+			wallet = MinimaDB.getDB().getWallet();
+		}
 		
 		//Add all the peaks..
 		ArrayList<MMREntry> peaks = mTxBlock.getPreviousPeaks();
@@ -131,12 +141,9 @@ public class TxPoWTreeNode implements Streamable {
 			Coin spentcoin = input.getCoin().deepCopy();
 			spentcoin.setSpent(true);
 
-			//Get the Hash of this 
-			MiniData hashspent = Crypto.getInstance().hashObject(spentcoin);
-			
-			//And create a new MMRData structure - with ZERO value as it is now spent
-			MMRData mmrdata = new MMRData(hashspent, MiniNumber.ZERO);
-			
+			//Create the MMRData
+			MMRData mmrdata = MMRData.CreateMMRDataLeafNode(spentcoin, MiniNumber.ZERO);
+						
 			//Update the MMR
 			mMMR.updateEntry(entrynumber, input.getMMRProof(), mmrdata);
 			
@@ -144,12 +151,48 @@ public class TxPoWTreeNode implements Streamable {
 			mCoins.add(spentcoin);
 			
 			//Is this Relevant to us..
-			if(zFindRelevant && checkRelevant(spentcoin, wallet)) {
-				mRelevantMMRCoins.add(entrynumber);
+			if(zFindRelevant) {
+				if(checkRelevant(spentcoin, wallet)) {
+					mRelevantMMRCoins.add(entrynumber);
+					
+					//Message..
+					JSONObject coinjson = spentcoin.toJSON(true);
+					MinimaLogger.log("NEW Spent Coin : "+coinjson);
+					
+					//Send a message
+					JSONObject data = new JSONObject();
+					data.put("relevant", true);
+					data.put("txblockid", mTxBlock.getTxPoW().getTxPoWID());
+					data.put("txblock", block.toString());
+					data.put("spent", true);
+					data.put("coin", coinjson);
+					
+					//And Post it..
+					Main.getInstance().PostNotifyEvent(Main.MAIN_NEWCOIN, data);
 				
-				//Message..
-				MinimaLogger.log("NEW Spent Coin : "+spentcoin.toJSON());
-				balancechange = true;
+					//There has been a balance change
+					balancechange = true;
+				}
+				
+				//Check the Coin Notify Details..
+				String coinaddress = spentcoin.getAddress().to0xString();
+				if(MinimaDB.getDB().checkCoinNotify(coinaddress)) {
+					
+					//Message..
+					JSONObject coinjson = spentcoin.toJSON(true);
+					//MinimaLogger.log("NOTIFY Spent Coin : "+coinjson);
+					
+					//Send a message
+					JSONObject data = new JSONObject();
+					data.put("address", coinaddress);
+					data.put("txblockid", mTxBlock.getTxPoW().getTxPoWID());
+					data.put("txblock", block.toString());
+					data.put("spent", true);
+					data.put("coin", coinjson);
+					
+					//And Post it..
+					Main.getInstance().PostNotifyEvent(Main.MAIN_NOTIFYCOIN, data);
+				}
 			}
 		}
 		
@@ -166,12 +209,9 @@ public class TxPoWTreeNode implements Streamable {
 			newcoin.setBlockCreated(block);
 			newcoin.setSpent(false);
 			
-			//Get the Hash of this 
-			MiniData hashunspent = Crypto.getInstance().hashObject(newcoin);
-			
-			//And create a new MMRData with the correct amount
-			MMRData mmrdata = new MMRData(hashunspent, output.getAmount());
-			
+			//Create the MMRData
+			MMRData mmrdata = MMRData.CreateMMRDataLeafNode(newcoin, output.getAmount());
+						
 			//And add to the MMR
 			mMMR.addEntry(mmrdata);	
 			
@@ -179,12 +219,69 @@ public class TxPoWTreeNode implements Streamable {
 			mCoins.add(newcoin);
 			
 			//Is this Relevant to us..
-			if(zFindRelevant && checkRelevant(output, wallet)) {
-				mRelevantMMRCoins.add(entrynumber);
+			if(zFindRelevant){
+				if(checkRelevant(output, wallet)) {
+					mRelevantMMRCoins.add(entrynumber);
+					
+					//Message..
+					JSONObject coinjson = newcoin.toJSON(true);
+					
+					//Did we remove the state..
+					if(!newcoin.storeState()) {
+						//Get it..
+						ArrayList<StateVariable> removedstate = mTxBlock.removedState(newcoin.getCoinID().to0xString());
+						if(removedstate != null) {
+							//Add it to the JSON
+							coinjson.put("state", Coin.convertStateListToJSON(removedstate));
+						}
+					}
+					
+					MinimaLogger.log("NEW Unspent Coin : "+coinjson);
+					
+					//Send a message
+					JSONObject data = new JSONObject();
+					data.put("relevant", true);
+					data.put("txblockid", mTxBlock.getTxPoW().getTxPoWID());
+					data.put("txblock", block.toString());
+					data.put("spent", false);
+					data.put("coin", coinjson);
+					
+					//And Post it..
+					Main.getInstance().PostNotifyEvent(Main.MAIN_NEWCOIN, data);
+					
+					balancechange = true;
+				}
 				
-				//Message..
-				MinimaLogger.log("NEW Unspent Coin : "+newcoin.toJSON());
-				balancechange = true;
+				//Check the Coin Notify Details..
+				String coinaddress = newcoin.getAddress().to0xString();
+				if(MinimaDB.getDB().checkCoinNotify(coinaddress)) {
+					
+					//Message..
+					JSONObject coinjson = newcoin.toJSON(true);
+					
+					//Did we remove the state..
+					if(!newcoin.storeState()) {
+						//Get it..
+						ArrayList<StateVariable> removedstate = mTxBlock.removedState(newcoin.getCoinID().to0xString());
+						if(removedstate != null) {
+							//Add it to the JSON
+							coinjson.put("state", Coin.convertStateListToJSON(removedstate));
+						}
+					}
+					
+					//MinimaLogger.log("NOTIFY Unspent Coin : "+coinjson);
+					
+					//Send a message
+					JSONObject data = new JSONObject();
+					data.put("address", coinaddress);
+					data.put("txblockid", mTxBlock.getTxPoW().getTxPoWID());
+					data.put("txblock", block.toString());
+					data.put("spent", false);
+					data.put("coin", coinjson);
+					
+					//And Post it..
+					Main.getInstance().PostNotifyEvent(Main.MAIN_NOTIFYCOIN, data);
+				}
 			}
 		}
 		
@@ -429,6 +526,28 @@ public class TxPoWTreeNode implements Streamable {
 		return mTotalWeight;
 	}
 
+	public boolean checkFullTxns(TxPoWDB zTxpDB) {
+		
+		//If we have already checked 
+		if(mHaveCheckedFull) {
+			return true;
+		}
+		
+		//Cycle through all the TxPoW and see if we have them all
+		ArrayList<MiniData> txns = getTxPoW().getBlockTransactions();
+		for(MiniData txn : txns) {
+			boolean exists = zTxpDB.exists(txn.to0xString());
+			if(!exists) {
+				return false;
+			}
+		}
+		
+		//We now KNOW we have all the txns
+		mHaveCheckedFull = true;
+		
+		return true;
+	}
+	
 	@Override
 	public void writeDataStream(DataOutputStream zOut) throws IOException {
 		mTxBlock.writeDataStream(zOut);
@@ -475,5 +594,75 @@ public class TxPoWTreeNode implements Streamable {
 		TxPoWTreeNode node = new TxPoWTreeNode();
 		node.readDataStream(zIn);
 		return node;
+	}
+	
+	public static void CheckTxBlockForNotifyCoins(TxBlock zBlock) {
+		
+		String blockid 		= zBlock.getTxPoW().getTxPoWID();
+		String blocknumber 	= zBlock.getTxPoW().getBlockNumber().toString();
+		MinimaDB db	 		= MinimaDB.getDB();
+		
+		//Get all the input coins..
+		ArrayList<CoinProof> inputs = zBlock.getInputCoinProofs();
+		for(CoinProof cp : inputs) {
+			Coin cc = cp.getCoin();
+			
+			//Check the Coin Notify Details..
+			String coinaddress = cc.getAddress().to0xString();
+			if(db.checkCoinNotify(coinaddress)) {
+				
+				//Message..
+				JSONObject coinjson = cc.toJSON(true);
+				
+				//Send a message
+				JSONObject data = new JSONObject();
+				data.put("address", coinaddress);
+				data.put("txblockid", blockid);
+				data.put("txblock", blocknumber);
+				data.put("spent", true);
+				data.put("coin", coinjson);
+				
+				//MinimaLogger.log("NOTIFY CASCADE COIN : "+data.toString());
+				
+				//And Post it..
+				Main.getInstance().PostNotifyEvent(Main.MAIN_NOTIFYCASCADECOIN, data);
+			}
+		}
+		
+		//Get all the output coins
+		ArrayList<Coin> outputs = zBlock.getOutputCoins();
+		for(Coin cc : outputs) {
+			
+			//Check the Coin Notify Details..
+			String coinaddress = cc.getAddress().to0xString();
+			if(db.checkCoinNotify(coinaddress)) {
+				
+				//Message..
+				JSONObject coinjson = cc.toJSON(true);
+				
+				//Did we remove the state..
+				if(!cc.storeState()) {
+					//Get it..
+					ArrayList<StateVariable> removedstate = zBlock.removedState(cc.getCoinID().to0xString());
+					if(removedstate != null) {
+						//Add it to the JSON
+						coinjson.put("state", Coin.convertStateListToJSON(removedstate));
+					}
+				}
+				
+				//Send a message
+				JSONObject data = new JSONObject();
+				data.put("address", coinaddress);
+				data.put("txblockid", blockid);
+				data.put("txblock", blocknumber);
+				data.put("spent", false);
+				data.put("coin", coinjson);
+				
+				//MinimaLogger.log("NOTIFY CASCADE COIN : "+data.toString());
+				
+				//And Post it..
+				Main.getInstance().PostNotifyEvent(Main.MAIN_NOTIFYCASCADECOIN, data);
+			}
+		}
 	}
 }

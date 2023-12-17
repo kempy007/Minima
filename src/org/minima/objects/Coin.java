@@ -180,6 +180,13 @@ public class Coin implements Streamable {
 	public MiniNumber getAmount() {
 		return mAmount;
 	}
+	
+	public MiniNumber getTokenAmount() {
+		if(getToken() == null) {
+			return getAmount();
+		}
+		return getToken().getScaledTokenAmount(getAmount());
+	}
 
 	public MiniData getTokenID() {
 		return mTokenID;
@@ -193,12 +200,35 @@ public class Coin implements Streamable {
 		mState = zCompleteState;
 	}
 	
+	public boolean checkForStateVariable(String zCheckState) {
+		return checkForStateVariable(zCheckState, false);
+	}
+	
+	public boolean checkForStateVariable(String zCheckState, boolean zWildcard) {
+		for(StateVariable sv : mState) {
+			if(zWildcard) {
+				if(sv.getData().toString().contains(zCheckState)) {
+					return true;
+				}
+			}else {
+				if(sv.getData().toString().equals(zCheckState)) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+	
 	@Override
 	public String toString() {
 		return toJSON().toString();
 	}
 	
 	public JSONObject toJSON() {
+		return toJSON(false);
+	}
+	
+	public JSONObject toJSON(boolean zSimpleState) {
 		JSONObject obj = new JSONObject();
 		
 		obj.put("coinid", mCoinID.toString());
@@ -221,17 +251,42 @@ public class Coin implements Streamable {
 		obj.put("storestate", mStoreState);
 		
 		//Add the state variables
-		JSONArray starr = new JSONArray();
-		for(StateVariable sv : mState) {
-			starr.add(sv.toJSON());
+		if(zSimpleState) {
+			JSONObject state = new JSONObject();
+			for(StateVariable sv : mState) {
+				state.put(""+sv.getPort(), sv.getData().toString());
+			}
+			obj.put("state", state);
+			
+		}else {
+			JSONArray starr = new JSONArray();
+			for(StateVariable sv : mState) {
+				starr.add(sv.toJSON());
+			}
+			obj.put("state", starr);
 		}
-		obj.put("state", starr);
 		
 		obj.put("spent", mSpent.isTrue());
 		obj.put("mmrentry", mMMREntryNumber.toString());
 		obj.put("created", mBlockCreated.toString());
 		
 		return obj;
+	}
+	
+	public JSONObject getStateAsJSON() {
+		JSONObject state = new JSONObject();
+		for(StateVariable sv : mState) {
+			state.put(""+sv.getPort(), sv.getData().toString());
+		}
+		return state;
+	}
+	
+	public static JSONObject convertStateListToJSON(ArrayList<StateVariable> zStateList) {
+		JSONObject state = new JSONObject();
+		for(StateVariable sv : zStateList) {
+			state.put(""+sv.getPort(), sv.getData().toString());
+		}
+		return state;
 	}
 	
 	/**

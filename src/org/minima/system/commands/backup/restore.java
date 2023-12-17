@@ -12,7 +12,9 @@ import javax.crypto.Cipher;
 import javax.crypto.CipherInputStream;
 
 import org.minima.database.MinimaDB;
-import org.minima.objects.base.MiniByte;
+import org.minima.database.txpowdb.sql.TxPoWList;
+import org.minima.database.txpowdb.sql.TxPoWSqlDB;
+import org.minima.objects.TxPoW;
 import org.minima.objects.base.MiniData;
 import org.minima.system.Main;
 import org.minima.system.commands.Command;
@@ -33,7 +35,7 @@ public class restore extends Command {
 	public String getFullHelp() {
 		return "\nrestore\n"
 				+ "\n"
-				+ "Restore your node from a backup.\n"
+				+ "Restore your node from a backup. You MUST wait until all your original keys are created before this is allowed.\n"
 				+ "\n"
 				+ "file:\n"
 				+ "    Specify the filename or local path of the backup to restore\n"
@@ -48,12 +50,15 @@ public class restore extends Command {
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"file","password"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"file","password","shutdown"}));
 	}
 	
 	@Override
 	public JSONObject runCommand() throws Exception {
 		JSONObject ret = getJSONReply();
+		
+		//Can only do this if all keys created..
+		vault.checkAllKeysCreated();
 		
 		String file = getParam("file","");
 		if(file.equals("")) {
@@ -66,18 +71,21 @@ public class restore extends Command {
 			throw new CommandException("Cannot have a blank password");
 		}
 		
+		//Are we shutting down - could be a reset
+		boolean doshutdown = getBooleanParam("shutdown", true);
+		
 		//Does it exist..
 		File restorefile = MiniFile.createBaseFile(file);
 		if(!restorefile.exists()) {
 			throw new Exception("Restore file doesn't exist : "+restorefile.getAbsolutePath());
 		}
 		
+		//Clean up the memory
+		System.gc();
+		
 		///Base folder
 		File restorefolder = new File(GeneralParams.DATA_FOLDER, "restore");
 		restorefolder.mkdirs();
-		
-		//First stop everything.. and get ready to restore the files..
-		Main.getInstance().restoreReady();
 		
 		//Open the file..
 		byte[] restoredata = MiniFile.readCompleteFile(restorefile);
@@ -96,11 +104,15 @@ public class restore extends Command {
 		//Create the cipher..
 		Cipher ciph = GenerateKey.getCipherSYM(Cipher.DECRYPT_MODE, ivparam.getBytes(), secret);
 		CipherInputStream cis 	= new CipherInputStream(dis, ciph);
-		GZIPInputStream gzin 	= new GZIPInputStream(cis);
-		DataInputStream disciph = new DataInputStream(gzin);
 		
-		//Is this a complete backup..
-		boolean complete = MiniByte.ReadFromStream(disciph).isTrue();
+		GZIPInputStream gzin 	= null;
+		try {
+			gzin 	= new GZIPInputStream(cis);
+		}catch(Exception exc) {
+			//Incorrect password ?
+			throw new CommandException("Incorrect Password!");
+		}
+		DataInputStream disciph = new DataInputStream(gzin);
 		
 		//The total size of files..
 		long total = 1;
@@ -108,33 +120,51 @@ public class restore extends Command {
 		//Read in each section..
 		total += readNextBackup(new File(restorefolder,"wallet.sql"), disciph);
 		
-		//The rest write directly 
-		File basedb = MinimaDB.getDB().getBaseDBFolder();
-		total += readNextBackup(new File(basedb,"cascade.db"), disciph);
-		total += readNextBackup(new File(basedb,"chaintree.db"), disciph);
-		total += readNextBackup(new File(basedb,"userprefs.db"), disciph);
-		total += readNextBackup(new File(basedb,"p2p.db"), disciph);
+		//Stop saving state
+		MinimaDB.getDB().setAllowSaveState(false);
+		
+			//The rest write directly 
+			File basedb = MinimaDB.getDB().getBaseDBFolder();
+			total += readNextBackup(new File(basedb,"cascade.db"), disciph);
+			total += readNextBackup(new File(basedb,"chaintree.db"), disciph);
+			total += readNextBackup(new File(basedb,"userprefs.db"), disciph);
+			total += readNextBackup(new File(basedb,"p2p.db"), disciph);
+			
+			//Load these values 
+			File udb = new File(basedb,"userprefs.db");
+			MinimaDB.getDB().getUserDB().loadDB(udb);
+			udb = new File(basedb,"p2p.db");
+			MinimaDB.getDB().getP2PDB().loadDB(udb);
+					
+			//Now load the relevant TxPoW
+			TxPoWList txplist = readNextTxPoWList(disciph);
+			
+			//And add these to the DB
+			TxPoWSqlDB txpsqldb = MinimaDB.getDB().getTxPoWDB().getSQLDB();
+			txpsqldb.wipeDB();
+			for(TxPoW txp : txplist.mTxPoWs) {
+				txpsqldb.addTxPoW(txp, true);
+			}
+			
+		//Allow saving state
+		MinimaDB.getDB().setAllowSaveState(true);
+				
+		//If it has not stopped - First stop everything.. and get ready to restore the files..
+		Main.getInstance().restoreReady(doshutdown);
 		
 		//Now load the sql
 		MinimaDB.getDB().getWallet().restoreFromFile(new File(restorefolder,"wallet.sql"));
-				
-		//Complete
-		if(complete) {
-			total += readNextBackup(new File(restorefolder,"txpowdb.sql"), disciph);
-			total += readNextBackup(new File(restorefolder,"archive.sql"), disciph);
-		
-			MinimaDB.getDB().getTxPoWDB().getSQLDB().restoreFromFile(new File(restorefolder,"txpowdb.sql"));
-			MinimaDB.getDB().getArchive().restoreFromFile(new File(restorefolder,"archive.sql"));
-		}else {
 	
-			//Close and Wipe those..
-			MinimaDB.getDB().getTxPoWDB().getSQLDB().saveDB();
-			MinimaDB.getDB().getTxPoWDB().getSQLDB().getSQLFile().delete();
-			
-			MinimaDB.getDB().getArchive().saveDB();
-			MinimaDB.getDB().getArchive().getSQLFile().delete();
-		}
+		//Increment Key Uses
+		MinimaDB.getDB().getWallet().updateIncrementAllKeyUses(256);
 		
+		//Close
+		MinimaDB.getDB().getTxPoWDB().getSQLDB().saveDB(false);
+		
+		//Wipe ArchiveDB	
+		MinimaDB.getDB().getArchive().saveDB(false);
+		MinimaDB.getDB().getArchive().getSQLFile().delete();
+	
 		//Close up shop..
 		disciph.close();
 		cis.close();
@@ -155,17 +185,20 @@ public class restore extends Command {
 		ret.put("message", "Restart Minima for restore to take effect!");
 		
 		//Now save the Databases..
-		if(complete) {
-			MinimaDB.getDB().saveSQL();
-		}else {
-			MinimaDB.getDB().saveWalletSQL();
+		MinimaDB.getDB().saveSQL(false);
+		
+		//Normally yes
+		if(doshutdown) {
+			
+			//Don't do the usual shutdown hook
+			Main.getInstance().setHasShutDown();
+			
+			//And NOW shut down..
+			Main.getInstance().stopMessageProcessor();
+			
+			//Tell listener..
+			Main.getInstance().NotifyMainListenerOfShutDown();
 		}
-		
-		//Don't do the usual shutdown hook
-		Main.getInstance().setHasShutDown();
-		
-		//And NOW shut down..
-		Main.getInstance().stopMessageProcessor();
 		
 		return ret;
 	}
@@ -174,6 +207,12 @@ public class restore extends Command {
 		MiniData data = MiniData.ReadFromStream(zDis);
 		MiniFile.writeDataToFile(zOutput, data.getBytes());
 		return zOutput.length();
+	}
+	
+	private TxPoWList readNextTxPoWList(DataInputStream zDis) throws IOException {
+		MiniData data 		= MiniData.ReadFromStream(zDis);
+		TxPoWList txplist 	= TxPoWList.convertMiniDataVersion(data);
+		return txplist;
 	}
 
 	@Override

@@ -20,7 +20,7 @@ import org.minima.utils.json.JSONObject;
 public class txnpost extends Command {
 
 	public txnpost() {
-		super("txnpost","[id:] (auto:true) (burn:) - Post a transaction. Automatically set the Scripts and MMR");
+		super("txnpost","[id:] (auto:true) (burn:) (mine:) (txndelete:)- Post a transaction. Automatically set the Scripts and MMR");
 	}
 	
 	@Override
@@ -40,6 +40,12 @@ public class txnpost extends Command {
 				+ "burn: (optional)\n"
 				+ "    Amount in Minima to burn with the transaction.\n"
 				+ "\n"
+				+ "mine: (optional)\n"
+				+ "    true or false - should you mine the transaction immediately.\n"
+				+ "\n"
+				+ "txndelete: (optional)\n"
+				+ "    true or false - delete this txn after posting.\n"
+				+ "\n"
 				+ "Examples:\n"
 				+ "\n"
 				+ "txnpost id:simpletxn\n"
@@ -51,18 +57,54 @@ public class txnpost extends Command {
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"id","auto","burn"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"id","auto","burn","mine","txndelete"}));
 	}
 	
 	@Override
 	public JSONObject runCommand() throws Exception {
 		JSONObject ret = getJSONReply();
 
+		//Get the details
+		String id 		= getParam("id");
+		MiniNumber burn = getNumberParam("burn", MiniNumber.ZERO);
+		boolean auto 	= getBooleanParam("auto", false);
+		
+		//Are we Mining synchronously
+		boolean minesync = getBooleanParam("mine", false);
+		
+		//Post the Txn..
+		TxPoW txpow = postTxn(id, burn, auto, minesync);
+		
+		//Are we auto-deleting
+		boolean autodelete = getBooleanParam("txndelete", false);
+		if(autodelete) {
+			TxnDB db = MinimaDB.getDB().getCustomTxnDB();
+			
+			boolean found = db.deleteTransaction(id);
+		}
+		
+		//Add to response..
+		ret.put("response", txpow.toJSON());
+		
+		return ret;
+	}
+
+	@Override
+	public Command getFunction() {
+		return new txnpost();
+	}
+	
+	/**
+	 * Also used by TxnSign if autopost set
+	 */
+	public static TxPoW postTxn(String zID, MiniNumber zBurn, boolean zAuto, boolean zMineSync) throws Exception {
+		
+		//Get the TXN DB
 		TxnDB db = MinimaDB.getDB().getCustomTxnDB();
 		
 		//The transaction
-		String id 		= getParam("id");
-		MiniNumber burn = getNumberParam("burn", MiniNumber.ZERO);
+		String id 		= zID;
+		MiniNumber burn = zBurn;
 		if(burn.isLess(MiniNumber.ZERO)) {
 			throw new CommandException("Cannot have negative burn "+burn.toString());
 		}
@@ -81,8 +123,7 @@ public class txnpost extends Command {
 		txnrow.getTransaction().clearIsMonotonic();
 		
 		//Set the scripts and MMR
-		boolean auto = getBooleanParam("auto", false);
-		if(auto) {
+		if(zAuto) {
 			//Set the MMR data and Scripts
 			txnutils.setMMRandScripts(trans, wit);
 		}
@@ -120,18 +161,19 @@ public class txnpost extends Command {
 		//Calculate the size..
 		txpow.calculateTXPOWID();
 		
-		//All good..
-		ret.put("response", txpow.toJSON());
-				
-		//Send it to the Miner..
-		Main.getInstance().getTxPoWMiner().mineTxPoWAsync(txpow);
+		//Sync or Async mining..
+		if(zMineSync) {
+			boolean success = Main.getInstance().getTxPoWMiner().MineMaxTxPoW(false, txpow, 120000);
+			
+			if(!success) {
+				throw new CommandException("FAILED TO MINE txn in 120 seconds !?");
+			}
+			
+		}else {
+			Main.getInstance().getTxPoWMiner().mineTxPoWAsync(txpow);
+		}
 		
-		return ret;
-	}
-
-	@Override
-	public Command getFunction() {
-		return new txnpost();
+		return txpow;
 	}
 
 }

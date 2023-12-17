@@ -94,6 +94,8 @@ function getGlobals(){
 	addGlobalIfValid("@COINID");
 	addGlobalIfValid("@TOTIN");
 	addGlobalIfValid("@TOTOUT");
+	addGlobalIfValid("@COINAGE");
+	addGlobalIfValid("@CREATED");
 	
 	return JSON.stringify(globals);
 }
@@ -108,6 +110,8 @@ function clearGlobals(){
 	document.getElementById("@COINID").value = "";
 	document.getElementById("@TOTIN").value = "";
 	document.getElementById("@TOTOUT").value = "";
+	document.getElementById("@COINAGE").value = "";
+	document.getElementById("@CREATED").value = "";
 }
 
 function getOutputString(){
@@ -336,9 +340,9 @@ function parseComments(code){
                     isInComment = true;
                     o.push(" "); // add a space per spec
                     i++; // don't catch /*/
-              } else if(c[i] === "/"){ // start regexp literal
-                    isInRegExp = true;
-                    o.push(c[i]);
+              //} else if(c[i] === "/"){ // start regexp literal
+              //      isInRegExp = true;
+              //      o.push(c[i]);
               } else if(c[i] === "'" || c[i] === '"'){ // string literal
                     isInString = true;
                     o.push(c[i]);

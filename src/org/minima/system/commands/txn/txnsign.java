@@ -11,18 +11,23 @@ import org.minima.database.wallet.ScriptRow;
 import org.minima.database.wallet.Wallet;
 import org.minima.objects.Coin;
 import org.minima.objects.Transaction;
+import org.minima.objects.TxPoW;
 import org.minima.objects.Witness;
+import org.minima.objects.base.MiniData;
+import org.minima.objects.base.MiniNumber;
 import org.minima.objects.keys.Signature;
+import org.minima.objects.keys.TreeKey;
 import org.minima.system.brains.TxPoWGenerator;
 import org.minima.system.commands.Command;
 import org.minima.system.commands.CommandException;
+import org.minima.system.commands.backup.vault;
 import org.minima.utils.json.JSONArray;
 import org.minima.utils.json.JSONObject;
 
 public class txnsign extends Command {
 
 	public txnsign() {
-		super("txnsign","[id:] [publickey:0x..|auto] - Sign a transaction");
+		super("txnsign","[id:] [publickey:0x..|auto] (txnpostauto:) (txnpostburn:) (txnpostmine:) (txndelete:) - Sign a transaction");
 	}
 	
 	@Override
@@ -39,16 +44,32 @@ public class txnsign extends Command {
 				+ "publickey:\n"
 				+ "    The public key specified in a custom script, or 'auto' for transactions with simple inputs.\n"
 				+ "\n"
+				+ "txnpostauto: (optional)\n"
+				+ "    Do you want to post this transaction. Use the same values as you would for txnpost auto(sort MMR and Scripts)\n"
+				+ "\n"
+				+ "txnpostburn: (optional)\n"
+				+ "    If you also post this transaction, do you want to add a burn transaction.\n"
+				+ "\n"
+				+ "txnpostmine: (optional)\n"
+				+ "    If you also post this transaction, do you want to mine it immediately.\n"
+				+ "\n"
+				+ "txndelete: (optional)\n"
+				+ "    true or false - delete this txn after signing AND posting.\n"
+				+ "\n"
 				+ "Examples:\n"
 				+ "\n"
 				+ "txnsign id:simpletxn publickey:auto\n"
 				+ "\n"
-				+ "txnsign id:multisig publickey:0xFD8B..\n";
+				+ "txnsign id:simpletxn publickey:auto password:your_password\n"
+				+ "\n"
+				+ "txnsign id:multisig publickey:0xFD8B..\n"
+				+ "\n"
+				+ "txnsign id:simpletxn publickey:auto txnpostauto:true\n";
 	}
 	
 	@Override
 	public ArrayList<String> getValidParams(){
-		return new ArrayList<>(Arrays.asList(new String[]{"id","publickey"}));
+		return new ArrayList<>(Arrays.asList(new String[]{"id","publickey","txndelete","txnpostauto","txnpostburn","txnpostmine","password","privatekey","keyuses"}));
 	}
 	
 	@Override
@@ -84,6 +105,16 @@ public class txnsign extends Command {
 		
 		JSONObject resp = new JSONObject();
 		
+		boolean passwordlock = false;
+		if(existsParam("password") && !MinimaDB.getDB().getWallet().isBaseSeedAvailable()) {
+			
+			//Lets unlock the DB
+			vault.passowrdUnlockDB(getParam("password"));
+			 
+			//Lock at the end..
+			passwordlock = true;
+		}
+		
 		//Are we auto signing.. if all the coin inputs are simple
 		if(pubk.equals("auto")) {
 			
@@ -113,10 +144,37 @@ public class txnsign extends Command {
 				}
 			}
 			
+		}else if(pubk.equals("custom")) {
+			
+			//Get the private key
+			MiniData privkey = getDataParam("privatekey");
+			
+			//Get uses..
+			MiniNumber uses = getNumberParam("keyuses");
+			
+			//Make the TreeKey
+			TreeKey treekey = TreeKey.createDefault(privkey);
+			
+			//Set uses..
+			treekey.setUses(uses.getAsInt());
+			
+			//Now we have the Key.. sign the Txn ID
+			Signature signature = treekey.sign(txn.getTransactionID());
+			
+			//Add it..
+			wit.addSignature(signature);
+			
 		}else {
 			//Check we have it
 			KeyRow pubrow = walletdb.getKeyFromPublic(pubk);
 			if(pubrow == null) {
+				
+				//Are we locking the DB
+				if(passwordlock) {
+					//Lock the Wallet DB
+					vault.passwordLockDB(getParam("password"));
+				}
+				
 				throw new CommandException("Public Key not found : "+pubk);
 			}
 			
@@ -130,6 +188,12 @@ public class txnsign extends Command {
 			wit.addSignature(signature);
 		}
 		
+		//Are we locking the DB
+		if(passwordlock) {
+			//Lock the Wallet DB
+			vault.passwordLockDB(getParam("password"));
+		}
+		
 		//The keys that were found and used
 		resp.put("keys", foundkeys);
 	
@@ -141,6 +205,41 @@ public class txnsign extends Command {
 		//Did we not find any
 		if(notfoundkeys.size()>0) {
 			resp.put("notfound", notfoundkeys);
+		}
+		
+		//Are we auto posting ASWELL..
+		if(existsParam("txnpostauto")) {
+			
+			//Are we AUTO
+			boolean postauto 	= getBooleanParam("txnpostauto");
+			
+			//Get the burn
+			MiniNumber burn 	= getNumberParam("txnpostburn", MiniNumber.ZERO);
+			
+			//Are we Mining synchronously
+			boolean minesync 	= getBooleanParam("txnpostmine", false);
+			
+			//And POst it..
+			TxPoW txp 			= txnpost.postTxn(id, burn, postauto,minesync);
+			
+			resp.put("txnpost", true);
+			resp.put("txnpostauto", postauto);
+			resp.put("txnpostburn", burn.toString());
+			resp.put("txnpostmine", minesync);
+			resp.put("txpow", txp.toJSON());
+			
+			//Are we auto-deleting
+			boolean autodelete = getBooleanParam("txndelete", false);
+			if(autodelete) {
+				//Get the Transaction..
+				boolean found = db.deleteTransaction(id);
+				resp.put("delete", true);
+			}else {
+				resp.put("delete", false);
+			}
+			
+		}else {
+			resp.put("txnpost", false);
 		}
 		
 		ret.put("response", resp);

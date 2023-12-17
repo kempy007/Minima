@@ -5,11 +5,13 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.minima.database.MinimaDB;
 import org.minima.database.txpowdb.ram.RamDB;
 import org.minima.database.txpowdb.ram.RamData;
 import org.minima.database.txpowdb.sql.TxPoWSqlDB;
 import org.minima.objects.TxPoW;
 import org.minima.objects.base.MiniData;
+import org.minima.system.brains.TxPoWSearcher;
 
 /**
  * The Main TxPoW store for the whole app
@@ -43,36 +45,50 @@ public class TxPoWDB {
 		mSqlDB.hardCloseDB();
 	}
 	
-	public void saveDB() {
+	public void saveDB(boolean zCompact) {
 		//Shut down the SQL DB cleanly
-		mSqlDB.saveDB();
+		mSqlDB.saveDB(zCompact);
 	}
 	
 	/**
 	 * Add a TxPoW to the Database - both RAM and SQL
 	 */
-	public void addTxPoW(TxPoW zTxPoW) {
+	public boolean addTxPoW(TxPoW zTxPoW) {
 		//Get the ID
 		String txpid = zTxPoW.getTxPoWID();
 		
 		//Do we have it already..
 		if(!mRamDB.exists(txpid)) {
+
 			//Add it to the RAM
 			mRamDB.addTxPoW(zTxPoW);
 		}
 		
 		//Is it in the SQL
 		if(!mSqlDB.exists(txpid)) {
+			
+			//Is this TxPoW relevant
+			boolean relevant = TxPoWSearcher.checkTxPoWRelevant(zTxPoW, MinimaDB.getDB().getWallet());
+			
 			//Add it to the SQL..
-			mSqlDB.addTxPoW(zTxPoW);
+			mSqlDB.addTxPoW(zTxPoW, relevant);
+			
+			return relevant;
 		}
+		
+		//Check if relevant
+		return TxPoWSearcher.checkTxPoWRelevant(zTxPoW, MinimaDB.getDB().getWallet());
 	}
 	
 	public void addSQLTxPoW(TxPoW zTxPoW) {
 		//Is it in the SQL
 		if(!mSqlDB.exists(zTxPoW.getTxPoWID())) {
+			
+			//Is this TxPoW relevant
+			boolean relevant = TxPoWSearcher.checkTxPoWRelevant(zTxPoW, MinimaDB.getDB().getWallet());
+			
 			//Add it to the SQL..
-			mSqlDB.addTxPoW(zTxPoW);
+			mSqlDB.addTxPoW(zTxPoW,relevant);
 		}
 	}
 	
@@ -167,6 +183,10 @@ public class TxPoWDB {
 	 */
 	public void cleanDBRAM() {
 		mRamDB.cleanDB();
+	}
+	
+	public void wipeDBRAM() {
+		mRamDB.wipeRamDB();
 	}
 	
 	public void cleanDBSQL() {

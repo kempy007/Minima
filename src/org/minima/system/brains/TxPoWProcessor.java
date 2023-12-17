@@ -1,5 +1,6 @@
 package org.minima.system.brains;
 
+import java.io.IOException;
 import java.util.ArrayList;
 
 import org.minima.database.MinimaDB;
@@ -15,19 +16,34 @@ import org.minima.objects.base.MiniData;
 import org.minima.objects.base.MiniNumber;
 import org.minima.system.Main;
 import org.minima.system.network.minima.NIOManager;
+import org.minima.system.network.minima.NIOMessage;
 import org.minima.system.params.GeneralParams;
 import org.minima.system.params.GlobalParams;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.Stack;
+import org.minima.utils.json.JSONObject;
 import org.minima.utils.messages.Message;
 import org.minima.utils.messages.MessageProcessor;
 
 public class TxPoWProcessor extends MessageProcessor {
 	
 	private static final String TXPOWPROCESSOR_PROCESSTXPOW 		= "TXP_PROCESSTXPOW";
+	private static final String TXPOWPROCESSOR_PROCESSTXBLOCK 		= "TXP_PROCESSTXBLOCK";
+	
 	private static final String TXPOWPROCESSOR_PROCESS_IBD 			= "TXP_PROCESS_IBD";
 	private static final String TXPOWPROCESSOR_PROCESS_SYNCIBD 		= "TXP_PROCESS_SYNCIBD";
 	private static final String TXPOWPROCESSOR_PROCESS_ARCHIVEIBD 	= "TXP_PROCESS_ARCHIVEIBD";
+	
+	/**
+	 * Ask for Txns in blocks less than this old
+	 */
+	private static final MiniNumber THREE_HOURS = new MiniNumber(1000 * 60 * 60 * 3);
+	
+	/**
+	 * The IBD you receive on startup
+	 */
+	private long mFirstIBD 				= System.currentTimeMillis();
+	private long MAX_FIRST_IBD_TIME 	= 1000 * 60 * 5; 
 	
 	public TxPoWProcessor() {
 		super("TXPOWPROCESSOR");
@@ -37,17 +53,69 @@ public class TxPoWProcessor extends MessageProcessor {
 	 * Main entry point for a TxPoW into the system
 	 */
 	public void postProcessTxPoW(TxPoW zTxPoW) {
+		
+		//Are we shutting down
+		if(Main.getInstance().isShuttongDownOrRestoring()) {
+			return;
+		}
+		
 		//Add / Update last access to the DB
-		MinimaDB.getDB().getTxPoWDB().addTxPoW(zTxPoW);
+		boolean relevant = MinimaDB.getDB().getTxPoWDB().addTxPoW(zTxPoW);
+		
+		//If Relevant - post a message
+		if(relevant) {
+			JSONObject data = new JSONObject();
+			data.put("relevant", true);
+			data.put("txpow", zTxPoW.toJSON());
+			
+			//And Post it..
+			Main.getInstance().PostNotifyEvent("NEWTXPOW", data);
+		}
+		
+		//Do NOT process if you are a txblock node
+		if(GeneralParams.TXBLOCK_NODE) {
+			return;
+		}
 		
 		//Post a message on the single threaded stack
 		PostMessage(new Message(TXPOWPROCESSOR_PROCESSTXPOW).addObject("txpow", zTxPoW));
 	}
 	
 	/**
+	 * Main entry point for a TxBlock node into the system
+	 */
+	public void postProcessTxBlock(TxBlock zTxBlock) {
+		
+		//Are we shutting down
+		if(Main.getInstance().isShuttongDownOrRestoring()) {
+			return;
+		}
+		
+		//ONLY txblocknodes do this
+		if(!GeneralParams.TXBLOCK_NODE) {
+			return;
+		}
+		
+		//Add to the RAM DB
+		MinimaDB.getDB().getTxBlockDB().addTxBlock(zTxBlock);
+		
+		//Add / Update last access to the DB
+		MinimaDB.getDB().getTxPoWDB().addTxPoW(zTxBlock.getTxPoW());
+		
+		//Post a message on the single threaded stack
+		PostMessage(new Message(TXPOWPROCESSOR_PROCESSTXBLOCK).addObject("txblock", zTxBlock));
+	}
+	
+	/**
 	 * Main Entry point for IBD messages
 	 */
 	public void postProcessIBD(IBD zIBD, String zClientUID) {
+		
+		//Are we shutting down
+		if(Main.getInstance().isShuttongDownOrRestoring()) {
+			return;
+		}
+		
 		//Post a message on the single threaded stack
 		PostMessage(new Message(TXPOWPROCESSOR_PROCESS_IBD).addObject("ibd", zIBD).addString("uid", zClientUID));
 	}
@@ -95,8 +163,36 @@ public class TxPoWProcessor extends MessageProcessor {
 			
 			//Check we are at least enough blocks on from the root of the tree.. for speed and difficulty calcs
 			MiniNumber blknum 	= txpow.getBlockNumber();
+			MiniNumber tipnum 	= txptree.getTip().getBlockNumber();
 			MiniNumber rootnum 	= txptree.getRoot().getBlockNumber();
-			boolean validrange 	= blknum.isMore(rootnum);
+			
+			boolean validrange = false;
+			if(GeneralParams.TEST_PARAMS) {
+				validrange 	= blknum.isMore(rootnum);
+			}else{
+				
+				//Make sure far enough from root to be able to check block difficulty
+				if(tipnum.isLess(MiniNumber.THOUSAND)) {
+					validrange = true;
+				}else {
+				
+					//Min block we will check..
+					MiniNumber minblock = rootnum.add(GlobalParams.MINIMA_BLOCKS_SPEED_CALC); 
+					
+					//Make sure at least Speed Calc away from root..
+					if(blknum.isMore(minblock)){
+						validrange = true;
+					}
+				}
+			}
+			
+			if(txpow.isBlock() && !validrange) {
+				if(GeneralParams.BLOCK_LOGS) {
+					MinimaLogger.log("Invalid range for block check @ "
+										+blknum+" root:"+rootnum+" tip:"+tipnum
+										+" txpowid:"+txpow.getTxPoWID());
+				}
+			}
 			
 			//Is it a block.. that is the only time we crunch
 			if(txpow.isBlock() && validrange) {
@@ -117,11 +213,30 @@ public class TxPoWProcessor extends MessageProcessor {
 						//Do we have them all
 						if(alltrans.size() == numtxns) {
 						
+							//Is this a vliad block..
+//							boolean validblock = TxPoWChecker.checkTxPoWBlock(parentnode, txpow, alltrans);
+							boolean validblock = TxPoWChecker.checkTxPoWBlockTimed(parentnode, txpow, alltrans);
+							
 							//OK - Lets check this block
-							if(TxPoWChecker.checkTxPoWBlock(parentnode, txpow, alltrans)) {
+							if(validblock) {
 								
 								//Create a TxBlock..
 								TxBlock txblock = new TxBlock(parentnode.getMMR(), txpow, alltrans);
+								
+								//Add to the RAM DB
+								MinimaDB.getDB().getTxBlockDB().addTxBlock(txblock);
+								
+								//Shall we log it..
+								if(GeneralParams.BLOCK_LOGS) {
+									MinimaLogger.log("Added block to tree : "+txblock.getTxPoW().getBlockNumber()+" "+txblock.getTxPoW().getTxPoWID());
+								}
+								
+								//Send a message to everyone..
+								try {
+									NIOManager.sendNetworkMessageAll(NIOMessage.MSG_TXBLOCKID, txblock.getTxPoW().getTxPoWIDData());
+								} catch (Exception e) {
+									MinimaLogger.log(e);
+								}
 								
 								//Create a new node
 								TxPoWTreeNode newblock = new TxPoWTreeNode(txblock);
@@ -140,6 +255,11 @@ public class TxPoWProcessor extends MessageProcessor {
 								for(TxPoW child : children) {
 									processstack.push(child);
 								}
+							}else {
+								MinimaLogger.log("[!] Failed block check @ "
+													+txpow.getBlockNumber()+" txpowid:"
+													+txpow.getTxPoWID()
+													+" root:"+rootnum+" tip:"+tipnum);
 							}
 						}
 						
@@ -163,17 +283,148 @@ public class TxPoWProcessor extends MessageProcessor {
 		}
 	}
 	
+	/**
+	 * Main TxPoW process function
+	 *  
+	 * @param zTxPoW
+	 */
+	private void processTxBlock(TxBlock zTxBlock) {
+		
+		//Are we running this type of node..
+		if(!GeneralParams.TXBLOCK_NODE) {
+			return;
+		}
+		
+		//Has something on tree changed
+		boolean recalculate = false;
+		
+		//Fast access DB
+		TxPowTree txptree 	= MinimaDB.getDB().getTxPoWTree();
+		Cascade	cascdb		= MinimaDB.getDB().getCascade();
+		
+		//Process a stack of TxPoW if necessary
+		Stack processstack = new Stack();
+		processstack.push(zTxBlock);
+		
+		//Now work through all the required blocks
+		while(!processstack.isEmpty()) {
+		
+			//Get the next txpow
+			TxBlock trustedtxblock = (TxBlock) processstack.pop();
+			
+			//Get the TxPoW
+			TxPoW txpow = trustedtxblock.getTxPoW();
+			
+			//Check we are at least enough blocks on from the root of the tree.. for speed and difficulty calcs
+			MiniNumber blknum 	= txpow.getBlockNumber();
+			MiniNumber tipnum 	= txptree.getTip().getBlockNumber();
+			MiniNumber rootnum 	= txptree.getRoot().getBlockNumber();
+			
+			boolean validrange = false;
+			if(GeneralParams.TEST_PARAMS) {
+				validrange 	= blknum.isMore(rootnum);
+			}else{
+				
+				//Make sure far enough from root to be able to check block difficulty
+				if(tipnum.isLess(MiniNumber.THOUSAND)) {
+					validrange = true;
+				}else {
+				
+					//Min block we will check..
+					MiniNumber minblock = rootnum.add(GlobalParams.MINIMA_BLOCKS_SPEED_CALC); 
+					
+					//Make sure at least Speed Calc away from root..
+					if(blknum.isMore(minblock)){
+						validrange = true;
+					}
+				}
+			}
+			
+			if(txpow.isBlock() && !validrange) {
+				if(GeneralParams.BLOCK_LOGS) {
+					MinimaLogger.log("[!] Invalid range for txblock check slavemode @ "
+										+blknum+" root:"+rootnum+" tip:"+tipnum
+										+" txpowid:"+txpow.getTxPoWID());
+				}
+			}
+			
+			//Is it a block.. that is the only time we crunch
+			if(txpow.isBlock() && validrange) {
+				
+				//Check not already added
+				TxPoWTreeNode oldnode = txptree.findNode(txpow.getTxPoWID());
+				if(oldnode == null) {
+					
+					//Is there a valid parent block node..
+					TxPoWTreeNode parentnode = txptree.findNode(txpow.getParentID().to0xString());
+					if(parentnode != null) {
+					
+						//Check this TxBlock is Valid..
+						boolean validblock = TxPoWChecker.checkTxBlockOnly(parentnode, trustedtxblock);
+						
+						//OK - Lets check this block
+						if(validblock) {
+							
+							//Shall we log it..
+							if(GeneralParams.BLOCK_LOGS) {
+								MinimaLogger.log("Added TxBlock to tree : "+trustedtxblock.getTxPoW().getBlockNumber()+" "+trustedtxblock.getTxPoW().getTxPoWID());
+							}
+							
+							//Create a new node - using the given TxBlock
+							TxPoWTreeNode newblock = new TxPoWTreeNode(trustedtxblock);
+							
+							//Lets add it to the tree
+							parentnode.addChildNode(newblock);
+							
+							//Add fast link in tree - otherwise only reset / added when recalculate tree is called
+							txptree.addFastLink(newblock);
+							
+							//we need to recalculate the Tree
+							recalculate = true;
+							
+							//Do we have children for this block
+							ArrayList<TxBlock> children = MinimaDB.getDB().getTxBlockDB().getChildBlocks(txpow.getTxPoWID());
+							for(TxBlock child : children) {
+								processstack.push(child);
+							}
+						}else {
+							MinimaLogger.log("[!] Failed txblock check @ "
+												+txpow.getBlockNumber()+" txpowid:"
+												+txpow.getTxPoWID()
+												+" root:"+rootnum+" tip:"+tipnum);
+						}
+						
+					}else {
+						
+						//Do we have the Parent TxPoW
+						TxBlock parent = MinimaDB.getDB().getTxBlockDB().findTxBlock(txpow.getParentID().to0xString());
+						if(parent != null) {
+							//If Parent not added.. must be missing transactions.. try now ( This block builds on it soo.. )
+							processstack.push(parent);
+						}
+					}
+				}
+			}
+		}
+		
+		//Did something change..
+		if(recalculate) {
+			
+			//Recalculate the whole tree
+			recalculateTree();
+		}
+	}
+	
 	private boolean processSyncBlock(TxBlock zTxBlock) throws Exception {
 		
-		//Are we shutting down..
-//		if(Main.getInstance().isShuttingDown()) {
-//			return false;
-//		}
-		
+		//Get all the required DBs
 		Cascade cascdb		= MinimaDB.getDB().getDB().getCascade();
 		TxPoWDB txpdb 		= MinimaDB.getDB().getTxPoWDB();
 		TxPowTree txptree 	= MinimaDB.getDB().getTxPoWTree();
 		
+		//Add to the RAM DB
+		MinimaDB.getDB().getTxBlockDB().addTxBlock(zTxBlock);
+				
 		//Add the TxPoW to the database - in case we don't have it
 		txpdb.addTxPoW(zTxBlock.getTxPoW());
 		
@@ -229,6 +480,9 @@ public class TxPoWProcessor extends MessageProcessor {
 		return false;
 	}
 	
+	public void onStartUpRecalc() {
+		recalculateTree();
+	}
 	
 	private void recalculateTree() {
 		
@@ -287,10 +541,20 @@ public class TxPoWProcessor extends MessageProcessor {
 					
 					//And add to the cascade
 					cascdb.addToTip(txpnode.getTxPoW());
+					
+					//Send out Notify Messages for coins added
+					try {
+						TxPoWTreeNode.CheckTxBlockForNotifyCoins(txpnode.getTxBlock());
+					}catch(Exception exc) {
+						MinimaLogger.log(exc);
+					}
 				}
 				
 				//And finally..
 				cascdb.cascadeChain();
+				
+				//Clear the TxBlockDB
+				MinimaDB.getDB().getTxBlockDB().clearOld(newroot.getBlockNumber().sub(MiniNumber.HUNDRED));
 			}
 		
 			//And now set all the onchain txns so not used again in a new TxPoW
@@ -344,11 +608,30 @@ public class TxPoWProcessor extends MessageProcessor {
 		}
 		
 		if(zMessage.isMessageType(TXPOWPROCESSOR_PROCESSTXPOW)) {
+			
+			//Do NOT process if you are a txblock node
+			if(GeneralParams.TXBLOCK_NODE) {
+				return;
+			}
+			
 			//Get the TxPoW
 			TxPoW txp = (TxPoW) zMessage.getObject("txpow");
 			
 			//Process it..
 			processTxPoW(txp);
+		
+		}else if(zMessage.isMessageType(TXPOWPROCESSOR_PROCESSTXBLOCK)) {
+			
+			//ONLY process if you are a txblock node
+			if(!GeneralParams.TXBLOCK_NODE) {
+				return;
+			}
+			
+			//Get the TxBlock
+			TxBlock txblock = (TxBlock)zMessage.getObject("txblock");
+			
+			//process it
+			processTxBlock(txblock);
 			
 		}else if(zMessage.isMessageType(TXPOWPROCESSOR_PROCESS_IBD)) {
 			
@@ -362,6 +645,15 @@ public class TxPoWProcessor extends MessageProcessor {
 			if(!ibd.checkValidData()) {
 				return;
 			}
+			
+			//we are syncing..
+			Main.getInstance().setSyncIBD(true);
+			
+			//How big is it..
+			if(GeneralParams.IBDSYNC_LOGS) {
+				MinimaLogger.log("Processing main IBD length : "+ibd.getTxBlocks().size());
+			}
+			long timestart = System.currentTimeMillis();
 			
 			//Does it have a cascade
 			if(ibd.hasCascade()) {
@@ -380,7 +672,7 @@ public class TxPoWProcessor extends MessageProcessor {
 						if(!casctip.isEqual(rootblock.decrement())) {
 							
 							ignore = true;
-							MinimaLogger.log("[!] IGNORE IDB - My Tree Root : "+rootblock+" IBD TIP : "+casctip);
+							MinimaLogger.log("[!] IGNORE IBD - My Tree Root : "+rootblock+" IBD TIP : "+casctip);
 						
 						}else{
 							
@@ -389,7 +681,7 @@ public class TxPoWProcessor extends MessageProcessor {
 							
 							if(!rootparent.isEqual(casctipid)) {
 								ignore = true;
-								MinimaLogger.log("[!] IGNORE IDB - Invalid Hash for parents");
+								MinimaLogger.log("[!] IGNORE IBD - Invalid Hash for parents");
 							}
 						}
 					}
@@ -405,6 +697,9 @@ public class TxPoWProcessor extends MessageProcessor {
 							//Set this for us
 							MinimaDB.getDB().setIBDCascade(ibd.getCascade());
 							
+							//Do we need to store the cascade in the ArchiveDB
+							MinimaDB.getDB().getArchive().checkCascadeRequired(ibd.getCascade());
+							
 						}catch(Exception exc) {
 							MinimaLogger.log(exc);
 						}
@@ -415,7 +710,7 @@ public class TxPoWProcessor extends MessageProcessor {
 					
 				}else {
 					//Received a cascade when we already have one.. ignore..
-					MinimaLogger.log("WARNING Received cascade when already have one from "+uid);
+					//MinimaLogger.log("WARNING Received cascade when already have one from "+uid);
 				}
 			}
 			
@@ -423,19 +718,27 @@ public class TxPoWProcessor extends MessageProcessor {
 			TxPowTree txptree 		= MinimaDB.getDB().getTxPoWTree();
 			MiniNumber timenow 		= new MiniNumber(System.currentTimeMillis());
 			
-			//If our chain is up to date (within 3 hrs) we don't accept TxBlock at all.. only full blocks
-			if(txptree.getTip() != null && ibd.getTxBlocks().size()>0) {
-				MiniNumber notxblocktimediff = new MiniNumber(1000 * 60 * 180);
-				if(GeneralParams.TEST_PARAMS) {
-					notxblocktimediff = new MiniNumber(1000 * 60 * 5);
-				}
-				if(txptree.getTip().getTxPoW().getTimeMilli().sub(timenow).abs().isLess(notxblocktimediff)) {
-					MinimaLogger.log("Your chain tip is up to date - no TxBlocks accepted - only FULL TxPoW");
-					
-					//Ask to sync the TxBlocks
-					askToSyncTxBlocks(uid);
-					
-					return;
+			//First run accept the IBD - still follow heaviest chain
+			long diff = System.currentTimeMillis() - mFirstIBD;
+			if((diff > MAX_FIRST_IBD_TIME) && !GeneralParams.TXBLOCK_NODE) {
+				
+				//If our chain is up to date (within 3 hrs) we don't accept TxBlock at all.. only full blocks
+				if(txptree.getTip() != null && ibd.getTxBlocks().size()>0) {
+					MiniNumber notxblocktimediff = new MiniNumber(1000 * 60 * 180);
+					if(GeneralParams.TEST_PARAMS) {
+						notxblocktimediff = new MiniNumber(1000 * 60 * 5);
+					}
+					if(txptree.getTip().getTxPoW().getTimeMilli().sub(timenow).abs().isLess(notxblocktimediff)) {
+						MinimaLogger.log("Your chain tip is up to date - no TxBlocks accepted - only FULL TxPoW");
+						
+						//we are not syncing..
+						Main.getInstance().setSyncIBD(false);
+						
+						//Ask to sync the TxBlocks
+						askToSyncTxBlocks(uid);
+						
+						return;
+					}
 				}
 			}
 			
@@ -452,21 +755,31 @@ public class TxPoWProcessor extends MessageProcessor {
 					processSyncBlock(block);	
 					additions++;
 				
+					//Request any missing..
+					requestMissingTxns(uid,block);
+					
 					//If we've added a lot of blocks..
-					if(additions > 1000) {
+					if(additions > 256) {
 						
 						//recalculate the Tree..
 						recalculateTree();
 						
+						//Clean memory
+						System.gc();
+						
 						//Reset these
 						additions = 0;
+						
+						if(GeneralParams.IBDSYNC_LOGS) {
+							MinimaLogger.log("[!] Processed IBD block @ "+block.getTxPoW().getBlockNumber().toString());
+						}
 					}
 					
 				}catch(Exception exc) {
 					MinimaLogger.log(exc.toString());
 					
-					//Something funny going on.. disconnect
-					Main.getInstance().getNIOManager().disconnect(uid);
+					//Something funny going on.. disconnect and remove from list
+					Main.getInstance().getNIOManager().disconnect(uid,true);
 					
 					break;
 				}
@@ -474,6 +787,18 @@ public class TxPoWProcessor extends MessageProcessor {
 			
 			//And now recalculate tree
 			recalculateTree();
+			
+			//How big is it..
+			long timediff = System.currentTimeMillis() - timestart;
+			if(GeneralParams.IBDSYNC_LOGS) {
+				MinimaLogger.log("Processing main IBD finished "+timediff+"ms");
+			}
+			
+			//we are not syncing..
+			Main.getInstance().setSyncIBD(false);
+			
+			//Wipe old Archive Blocks..
+			MinimaDB.getDB().getArchive().checkForCleanDB();
 			
 			//Ask to sync the TxBlocks
 			askToSyncTxBlocks(uid);
@@ -528,6 +853,9 @@ public class TxPoWProcessor extends MessageProcessor {
 				//we have a new last pow..
 				lastpow = block.getTxPoW();
 			}
+		
+			//Wipe old Archive Blocks..
+			MinimaDB.getDB().getArchive().checkForCleanDB();
 			
 			//Ask to sync the TxBlocks
 			askToSyncTxBlocks(uid);
@@ -544,7 +872,9 @@ public class TxPoWProcessor extends MessageProcessor {
 			//Cycle and add..
 			ArrayList<TxBlock> blocks = arch.getTxBlocks();
 			if(blocks.size() > 0) {
-				MinimaLogger.log("Processing Archive IBD length:"+blocks.size()+" start:"+blocks.get(0).getTxPoW().getBlockNumber());	
+				if(GeneralParams.IBDSYNC_LOGS) {
+					MinimaLogger.log("Processing Archive IBD length:"+blocks.size()+" start:"+blocks.get(0).getTxPoW().getBlockNumber());	
+				}
 			}
 			
 			for(TxBlock block : blocks) {
@@ -584,10 +914,43 @@ public class TxPoWProcessor extends MessageProcessor {
 	 * Send a SYNC TxBlock message
 	 */
 	public void askToSyncTxBlocks(String zClientID) {
+		
+		//Only ask if not in no sync ibd mode
 		if(!GeneralParams.NO_SYNC_IBD) {
 			Message synctxblock = new Message(NIOManager.NIO_SYNCTXBLOCK);
 			synctxblock.addString("client", zClientID);
 			Main.getInstance().getNetworkManager().getNIOManager().PostMessage(synctxblock);
+		}
+	}
+	
+	private void requestMissingTxns(String zClientID, TxBlock zBlock) {
+		
+		//Are we in TXBLOCK mode.. no txns pls
+		if(GeneralParams.TXBLOCK_NODE) {
+			return;
+		}
+		
+		//Get the TxPoW
+		TxPoW txp = zBlock.getTxPoW();
+		
+		//Is this a recent block ? 
+		MiniNumber timenow = new MiniNumber(System.currentTimeMillis());
+		MiniNumber mintime = timenow.sub(THREE_HOURS);
+		if(txp.getTimeMilli().isLess(mintime)) {
+			return;
+		}
+		
+		//Get all the missing txns in the block
+		try {
+			ArrayList<MiniData> txns = txp.getBlockTransactions();
+			for(MiniData txn : txns) {
+				boolean exists = MinimaDB.getDB().getTxPoWDB().exists(txn.to0xString());
+				if(!exists) {
+					NIOManager.sendNetworkMessage(zClientID, NIOMessage.MSG_TXPOWREQ, txn);
+				}
+			}
+		} catch (IOException e) {
+			MinimaLogger.log(e);
 		}
 	}
 }

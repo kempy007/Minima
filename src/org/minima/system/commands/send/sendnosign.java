@@ -30,7 +30,6 @@ import org.minima.system.brains.TxPoWMiner;
 import org.minima.system.brains.TxPoWSearcher;
 import org.minima.system.commands.Command;
 import org.minima.system.commands.CommandException;
-import org.minima.system.commands.base.send;
 import org.minima.system.commands.txn.txnutils;
 import org.minima.system.params.GlobalParams;
 import org.minima.utils.MiniFile;
@@ -60,13 +59,72 @@ public class sendnosign extends Command {
 	}
 	
 	public sendnosign() {
-		super("sendnosign","(address:Mx..|0x..) (amount:) (multi:[address:amount,..]) (tokenid:) (state:{}) (burn:) (split:) (debug:) - Create a txn but don't sign it");
+		super("sendnosign","(address:Mx..|0x..) (amount:) (multi:[address:amount,..]) (tokenid:) (state:{}) (burn:) (split:) (file:) (debug:) - Create a txn but don't sign it");
 	}
 	
 	@Override
 	public ArrayList<String> getValidParams(){
 		return new ArrayList<>(Arrays.asList(new String[]{"address","amount","multi",
-				"tokenid","state","burn","split","debug","dryrun"}));
+				"tokenid","state","burn","split","debug","dryrun","file"}));
+	}
+	
+	@Override
+	public String getFullHelp() {
+		return "\nsendnosign\n"
+				+ "\n"
+				+ "Create a txn but don't sign it.\n"
+				+ "\n"
+				+ "Constructs and outputs an unsigned transaction to a file in the base folder\n"
+				+ "\n"
+				+ "The output .txn file can then be imported to an offline node for signing.\n"
+				+ "\n"
+				+ "Must be done from an online node as the MMR proofs for the input coins are added.\n"
+				+ "\n"
+				+ "Useful when the keys on an online node are wiped or password locked.\n"
+				+ "\n"
+				+ "address: (optional)\n"
+				+ "    A Minima 0x or Mx wallet address or custom script address. Must also specify amount.\n"
+				+ "\n"
+				+ "amount: (optional)\n"
+				+ "    The amount of Minima or custom tokens to send to the specified address.\n"
+				+ "\n"
+				+ "multi: (optional)\n"
+				+ "    JSON Array listing addresses and amounts to send in one transaction.\n"
+				+ "    Takes the format [address:amount,address2:amount2,..], with each set in double quotes.\n"
+				+ "\n"
+				+ "tokenid: (optional)\n"
+				+ "    If sending a custom token, you must specify its tokenid. Defaults to Minima (0x00).\n"
+				+ "\n"
+				+ "state: (optional)\n"
+				+ "    List of state variables, if sending coins to a script. A JSON object in the format {\"port\":\"value\",..}\n"
+				+ "\n"
+				+ "burn: (optional)\n"
+				+ "    The amount of Minima to burn with this transaction.\n"
+				+ "\n"
+				+ "split: (optional)\n"
+				+ "    Set the number of coins the recipient will receive, between 1 and 20. Default is 1.\n"
+				+ "    The amount being sent will be split into multiple coins of equal value.\n"
+				+ "    You can split your own coins by sending to your own address.\n"
+				+ "    Useful if you want to send multiple transactions without waiting for change to be confirmed.\n"
+				+ "\n"
+				+ "file: (optional)\n"
+				+ "    Specify the file to output otherwise default chosen\n"
+				+ "\n"
+				+ "debug: (optional)\n"
+				+ "    true or false, true will print more detailed logs.\n"
+				+ "\n"
+				+ "Examples:\n"
+				+ "\n"
+				+ "sendnosign address:0xFF.. amount:10\n"
+				+ "\n"
+				+ "sendnosign address:0xFF.. amount:10 tokenid:0xFED5.. burn:0.1\n"
+				+ "\n"
+				+ "sendnosign address:0xFF.. amount:10 split:5 burn:0.1\n"
+				+ "\n"
+				+ "sendnosign multi:[\"0xFF..:10\",\"0xEE..:10\",\"0xDD..:10\"] split:20\n"
+				+ "\n"
+				+ "sendnosign amount:1 address:0xFF.. state:{\"0\":\"0xEE..\",\"1\":\"0xDD..\"}\n"
+				+ "\n";
 	}
 	
 	@Override
@@ -485,8 +543,16 @@ public class sendnosign extends Command {
 			txpow = TxPoWGenerator.generateTxPoW(transaction, witness);
 		}
 		
-		//Create the file..
-		File txnfile = MiniFile.createBaseFile("unsignedtransaction-"+System.currentTimeMillis()+".txn");
+		//Calculate the txpowid / size..
+		txpow.calculateTXPOWID();
+				
+		//Did they specify a file..
+		File txnfile = null;
+		if(existsParam("file")) {
+			txnfile = MiniFile.createBaseFile(getParam("file"));
+		}else {
+			txnfile = MiniFile.createBaseFile("unsignedtransaction-"+System.currentTimeMillis()+".txn");
+		}
 				
 		//Write it to a file..
 		MiniFile.writeObjectToFile(txnfile, txpow);

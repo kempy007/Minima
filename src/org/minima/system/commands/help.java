@@ -5,34 +5,47 @@ import java.util.Arrays;
 
 import org.minima.system.commands.backup.archive;
 import org.minima.system.commands.backup.backup;
+import org.minima.system.commands.backup.mysql;
+import org.minima.system.commands.backup.mysqlcoins;
+import org.minima.system.commands.backup.reset;
 import org.minima.system.commands.backup.restore;
+import org.minima.system.commands.backup.restoresync;
+import org.minima.system.commands.backup.vault;
 import org.minima.system.commands.base.balance;
+import org.minima.system.commands.base.block;
 import org.minima.system.commands.base.burn;
+import org.minima.system.commands.base.checkaddress;
 import org.minima.system.commands.base.coinexport;
 import org.minima.system.commands.base.coinimport;
+import org.minima.system.commands.base.coinnotify;
 import org.minima.system.commands.base.cointrack;
 import org.minima.system.commands.base.consolidate;
+import org.minima.system.commands.base.convert;
 import org.minima.system.commands.base.getaddress;
 import org.minima.system.commands.base.hash;
 import org.minima.system.commands.base.hashtest;
 import org.minima.system.commands.base.incentivecash;
 import org.minima.system.commands.base.logs;
+import org.minima.system.commands.base.maths;
 import org.minima.system.commands.base.mmrcreate;
 import org.minima.system.commands.base.mmrproof;
 import org.minima.system.commands.base.newaddress;
 import org.minima.system.commands.base.printtree;
 import org.minima.system.commands.base.quit;
 import org.minima.system.commands.base.random;
-import org.minima.system.commands.base.send;
-import org.minima.system.commands.base.sendpoll;
 import org.minima.system.commands.base.status;
 import org.minima.system.commands.base.tokencreate;
 import org.minima.system.commands.base.tokenvalidate;
 import org.minima.system.commands.base.trace;
-import org.minima.system.commands.base.tutorial;
-import org.minima.system.commands.base.vault;
 import org.minima.system.commands.maxima.maxcontacts;
+import org.minima.system.commands.maxima.maxcreate;
+import org.minima.system.commands.maxima.maxextra;
 import org.minima.system.commands.maxima.maxima;
+import org.minima.system.commands.maxima.maxsign;
+import org.minima.system.commands.maxima.maxverify;
+import org.minima.system.commands.mds.checkmode;
+import org.minima.system.commands.mds.checkpending;
+import org.minima.system.commands.mds.checkrestore;
 import org.minima.system.commands.mds.mds;
 import org.minima.system.commands.network.connect;
 import org.minima.system.commands.network.disconnect;
@@ -41,12 +54,21 @@ import org.minima.system.commands.network.network;
 import org.minima.system.commands.network.rpc;
 import org.minima.system.commands.network.webhooks;
 import org.minima.system.commands.scripts.newscript;
+import org.minima.system.commands.scripts.removescript;
 import org.minima.system.commands.scripts.runscript;
 import org.minima.system.commands.scripts.scripts;
 import org.minima.system.commands.search.coins;
+import org.minima.system.commands.search.history;
 import org.minima.system.commands.search.keys;
 import org.minima.system.commands.search.tokens;
 import org.minima.system.commands.search.txpow;
+import org.minima.system.commands.send.multisig;
+import org.minima.system.commands.send.send;
+import org.minima.system.commands.send.sendnosign;
+import org.minima.system.commands.send.sendpoll;
+import org.minima.system.commands.send.sendpost;
+import org.minima.system.commands.send.sendsign;
+import org.minima.system.commands.send.sendview;
 import org.minima.system.commands.signatures.sign;
 import org.minima.system.commands.signatures.verify;
 import org.minima.system.commands.txn.txnbasics;
@@ -98,27 +120,37 @@ public class help extends Command {
 			details.put("fullhelp", cmd.getFullHelp());
 			
 		}else{
-		
+
 			addCommand(details, new help());
 			
+			addCommand(details, new whitepaper());
+			
 			addCommand(details, new status());
+			addCommand(details, new block());
 			addCommand(details, new printtree());
 			addCommand(details, new burn());
 			addCommand(details, new trace());
 			addCommand(details, new logs());
-	//		addCommand(details, new automine());
 			addCommand(details, new hashtest());
-	//		addCommand(details, new debugflag());
+			addCommand(details, new checkaddress());
 			
+			addCommand(details, new history());
 			addCommand(details, new txpow());
 			addCommand(details, new coins());
 			addCommand(details, new tokens());
 			addCommand(details, new keys());
-			
+	
 			addCommand(details, new getaddress());
 			addCommand(details, new newaddress());
 			addCommand(details, new send());
 			addCommand(details, new sendpoll());
+			
+			addCommand(details, new sendnosign());
+			addCommand(details, new sendview());
+			addCommand(details, new sendsign());
+			addCommand(details, new sendpost());
+			addCommand(details, new multisig());
+			
 			addCommand(details, new balance());
 			addCommand(details, new tokencreate());
 			addCommand(details, new tokenvalidate());
@@ -126,13 +158,13 @@ public class help extends Command {
 			
 			addCommand(details, new hash());
 			addCommand(details, new random());
-			
-	//		addCommand(details, new file());
-	//		addCommand(details, new sql());
+			addCommand(details, new convert());
+			addCommand(details, new maths());
 			
 			addCommand(details, new scripts());
 			addCommand(details, new newscript());
 			addCommand(details, new runscript());
+			addCommand(details, new removescript());
 			addCommand(details, new tutorial());
 			
 			addCommand(details, new mmrcreate());
@@ -141,6 +173,7 @@ public class help extends Command {
 			addCommand(details, new coinimport());
 			addCommand(details, new coinexport());
 			addCommand(details, new cointrack());
+			addCommand(details, new coinnotify());
 			
 			addCommand(details, new sign());
 			addCommand(details, new verify());
@@ -163,6 +196,12 @@ public class help extends Command {
 			addCommand(details, new network());
 			addCommand(details, new maxima());
 			addCommand(details, new maxcontacts());
+			addCommand(details, new maxextra());
+			
+			addCommand(details, new maxcreate());
+			addCommand(details, new maxsign());
+			addCommand(details, new maxverify());
+			
 			addCommand(details, new message());
 			addCommand(details, new connect());
 			addCommand(details, new disconnect());
@@ -170,14 +209,20 @@ public class help extends Command {
 			addCommand(details, new webhooks());
 			
 			addCommand(details, new mds());
+			addCommand(details, new checkpending());
+			addCommand(details, new checkmode());
+			addCommand(details, new checkrestore());
 			
 			addCommand(details, new backup());
 			addCommand(details, new restore());
+			addCommand(details, new restoresync());
+			addCommand(details, new reset());
 			addCommand(details, new archive());
 			addCommand(details, new vault());
 			
-			addCommand(details, new incentivecash());
-	
+			addCommand(details, new mysql());
+			addCommand(details, new mysqlcoins());
+			
 			//addCommand(details, new nodecount());
 			addCommand(details, new quit());
 		}

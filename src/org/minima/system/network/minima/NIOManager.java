@@ -27,12 +27,15 @@ import org.minima.objects.TxBlock;
 import org.minima.objects.TxPoW;
 import org.minima.objects.base.MiniByte;
 import org.minima.objects.base.MiniData;
+import org.minima.objects.base.MiniNumber;
 import org.minima.system.Main;
 import org.minima.system.commands.network.connect;
 import org.minima.system.network.NetworkManager;
 import org.minima.system.network.maxima.MaximaManager;
 import org.minima.system.network.p2p.P2PFunctions;
+import org.minima.system.network.p2p.P2PManager;
 import org.minima.system.params.GeneralParams;
+import org.minima.utils.MiniFormat;
 import org.minima.utils.MinimaLogger;
 import org.minima.utils.Streamable;
 import org.minima.utils.messages.Message;
@@ -60,17 +63,20 @@ public class NIOManager extends MessageProcessor {
 
 	public static final String NIO_SYNCTXBLOCK 		= "NIO_SYNCTXBLOCK";
 
+	//50MB limit on archive read / write
+	public static long MAX_ARCHIVE_WRITE			= 1024 * 1024 * 50;
+	
 	/**
 	 * How many attempts to reconnect
 	 */
 	public int RECONNECT_ATTEMPTS = 3;
 	
 	/**
-	 * Check every minute to see if you have had a message in the last 2 mins..
+	 * Check every 2 minutes to see if you have had a message in the last 10 mins..
 	 */
 	public static final String NIO_CHECKLASTMSG 	= "NIO_CHECKLASTMSG";
 	long LASTREAD_CHECKER 		= 1000 * 120;
-	long MAX_LASTREAD_CHECKER 	= 1000 * 60 * 5;
+	long MAX_LASTREAD_CHECKER 	= 1000 * 60 * 10;
 	
 	/**
 	 * Nuclear check to see if the networking is behaving itself 
@@ -117,7 +123,7 @@ public class NIOManager extends MessageProcessor {
 	/**
 	 * Thread pool to manage incoming messages
 	 */
-	ExecutorService THREAD_POOL = Executors.newFixedThreadPool(8);
+	ExecutorService THREAD_POOL = Executors.newFixedThreadPool(4);
 	
 	public NIOManager(NetworkManager zNetManager) {
 		super("NIOMANAGER");
@@ -230,14 +236,17 @@ public class NIOManager extends MessageProcessor {
 	}
 	
 	public NIOClient getNIOClientFromUID(String zUID) {
-		ArrayList<NIOClient> conns = mNIOServer.getAllNIOClients();
-		for(NIOClient conn : conns) {
-			if(conn.getUID().equals(zUID)) {
-				return conn;
-			}
-		}
 		
-		return null;
+		return Main.getInstance().getNIOManager().getNIOServer().getClient(zUID);
+		
+//		ArrayList<NIOClient> conns = mNIOServer.getAllNIOClients();
+//		for(NIOClient conn : conns) {
+//			if(conn.getUID().equals(zUID)) {
+//				return conn;
+//			}
+//		}
+//		
+//		return null;
 	}
 	
 	public NIOTraffic getTrafficListener() {
@@ -269,7 +278,10 @@ public class NIOManager extends MessageProcessor {
 					if(msg == null) {
 						MinimaLogger.log("ERROR connect host specified incorrectly : "+host);
 					}else {
-						PostMessage(msg);
+						MinimaLogger.log("Attempt to connect to specified host in 10 seconds : "+host);
+						
+						//Wait 10 secs and then connect
+						PostTimerMessage(new TimerMessage(10000, msg));
 					}
 				}
 			}
@@ -302,6 +314,12 @@ public class NIOManager extends MessageProcessor {
 			String host = zMessage.getString("host");
 			int port 	= zMessage.getInteger("port");
 			
+			//Double check if this peer on the naughty list
+			if(P2PFunctions.isInvalidPeer(host+":"+port)) {
+	        	MinimaLogger.log("NIO_CONNECT : Trying to connect to Invalid Peer - disallowed @ "+host+":"+port);
+	        	return;
+	        }
+			
 			//Create a new NetworkClient
 			NIOClient nc = new NIOClient(host, port);
 			
@@ -318,7 +336,13 @@ public class NIOManager extends MessageProcessor {
 			//Is it still in the list..
 			if(!mConnectingClients.containsKey(nc.getUID())) {
 				//Has been removed.. stop trying to connect
+				MinimaLogger.log("Connect attempt to "+nc.getFullAddress()+" cancelled.. (removed from connecting clients)");
 				return;
+			}
+			
+			//Logs..
+			if(GeneralParams.TXBLOCK_NODE) {
+				MinimaLogger.log("Slave Node Connect attempt to "+nc.getFullAddress());
 			}
 			
 //			//How many connections - if too many stop.. 
@@ -348,30 +372,78 @@ public class NIOManager extends MessageProcessor {
 			//Do we try to reconnect
 			boolean reconnect = true;
 			
-			//Do we attempt a reconnect..
-			if(nc.getConnectAttempts() > RECONNECT_ATTEMPTS) {
-				//Do we have ANY connections at all..
-				ArrayList<NIOClient> conns = mNIOServer.getAllNIOClients();
-				if(conns.size()>0) {
+			//Are we in slave mode..
+			boolean p2pmessagesent = false;
+			if(GeneralParams.TXBLOCK_NODE) {
+				
+				if(nc.getConnectAttempts() > RECONNECT_ATTEMPTS) {
 					
-					//No reconnect
-					reconnect = false;
+					//Always attempts to reconnect
+					MinimaLogger.log("INFO : Slave node attempt reconnect.. "+nc.getFullAddress());
 					
-					//Tell the P2P..
-					Message newconn = new Message(P2PFunctions.P2P_NOCONNECT);
+					//We definitely have to reconnect..
+					nc.setConnectAttempts(1);
+				}
+			
+			}else if(!GeneralParams.P2P_ENABLED){
+				
+				//No P2P - keep trying to connect
+				if(nc.getConnectAttempts() > RECONNECT_ATTEMPTS) {
+					
+					//Always attempts to reconnect
+					MinimaLogger.log("INFO : P2P disabled.. attempt reconnect.. "+nc.getFullAddress()+" use disconnect to stop.");
+					
+					//We definitely have to reconnect..
+					nc.setConnectAttempts(1);
+				}
+				
+			}else{
+				
+				//Do we attempt a reconnect..
+				if(nc.getConnectAttempts() > RECONNECT_ATTEMPTS) {
+					
+					//Do we have ANY connections at all..
+					int connected = getNumberOfConnectedClients();
+					int connecting = getNumberOfConnnectingClients();
+					
+//					ArrayList<NIOClient> conns = mNIOServer.getAllNIOClients();
+//					int tot = conns.size();
+					
+					if(connected>0 || connecting>1) {
+						
+						//No reconnect
+						reconnect = false;
+						
+						//Tell the P2P..
+						p2pmessagesent = true;
+						Message newconn = new Message(P2PFunctions.P2P_NOCONNECT);
+						newconn.addObject("client", nc);
+						newconn.addString("uid", nc.getUID());
+						mNetworkManager.getP2PManager().PostMessage(newconn);
+						
+						MinimaLogger.log("INFO : "+nc.getUID()+"@"+nc.getFullAddress()+" connection failed - no more reconnect attempts ");
+						
+					}else {
+						MinimaLogger.log("INFO : "+nc.getUID()+"@"+nc.getFullAddress()+" Resetting reconnect attempts (no other connections) for "+nc.getFullAddress());
+						
+						//reset connect attempts..
+						nc.setConnectAttempts(1);
+					}
+				}
+			}
+			
+			//Is it on the Invalid List..
+			if(reconnect && P2PFunctions.isInvalidPeer(nc.getFullAddress())) {
+	        	MinimaLogger.log("NIO_RECONNECT : Trying to connect to Invalid Peer - disallowed @ "+nc.getFullAddress());
+	        	reconnect = false;
+	        	
+	        	if(!p2pmessagesent) {
+	        		Message newconn = new Message(P2PFunctions.P2P_NOCONNECT);
 					newconn.addObject("client", nc);
 					newconn.addString("uid", nc.getUID());
 					mNetworkManager.getP2PManager().PostMessage(newconn);
-					
-					MinimaLogger.log("INFO : "+nc.getUID()+"@"+nc.getFullAddress()+" connection failed - no more reconnect attempts ");
-					
-				}else {
-					MinimaLogger.log("INFO : "+nc.getUID()+"@"+nc.getFullAddress()+" Resetting reconnect attempts (no other connections) for "+nc.getFullAddress());
-					
-					//reset connect attempts..
-					nc.setConnectAttempts(1);
-				}
-			}
+	        	}
+	        }
 			
 			//Try and reconnect
 			if(reconnect) {
@@ -396,7 +468,6 @@ public class NIOManager extends MessageProcessor {
 		}else if(zMessage.getMessageType().equals(NIO_DISCONNECTALL)) {
 			
 			//Disconnect from all the clients..!
-			
 			Enumeration<NIOClient> clients = mConnectingClients.elements();
 			while(clients.hasMoreElements()) {
 				NIOClient nc = clients.nextElement();
@@ -424,7 +495,9 @@ public class NIOManager extends MessageProcessor {
 			NIOClient nioc = (NIOClient)zMessage.getObject("client");
 			
 			//Remove from the last sync list
-			NIOMessage.mlastSyncReq.remove(nioc.getUID());
+			String clientid = nioc.getUID();
+			NIOMessage.mlastSyncReq.remove(clientid);
+			NIOMessage.mLastChainSync.remove(clientid);
 			
 			//Do we reconnect
 			boolean reconnect = false;
@@ -435,6 +508,34 @@ public class NIOManager extends MessageProcessor {
 			//Is it a vaid client..
 			if(!nioc.isValidGreeting()) {
 				reconnect = false;
+			}
+			
+			//Is it incoming..
+			if(nioc.isIncoming()) {
+				reconnect = false;
+			}
+			
+			//Is it on the Invalid List..
+			if(reconnect && P2PFunctions.isInvalidPeer(nioc.getFullAddress())) {
+	        	MinimaLogger.log("NIO_DISCONNECT : Trying to connect to Invalid Peer - disallowed @ "+nioc.getFullAddress());
+	        	reconnect = false;
+	        }
+			
+			//Slave node logs
+			if(GeneralParams.TXBLOCK_NODE) {
+				if(zMessage.exists("reconnect")) {
+					MinimaLogger.log("SLAVE NODE disconneced.. from:"+nioc.getUID()+" req:"+zMessage.getBoolean("reconnect")+" reconnect:"+reconnect+" validgreeting:"+nioc.isValidGreeting()+" host:"+nioc.getFullAddress()+" incoming:"+nioc.isIncoming());
+				}else {
+					MinimaLogger.log("SLAVE NODE disconneced.. from:"+nioc.getUID()+" reconnect:"+reconnect+" validgreeting:"+nioc.isValidGreeting()+" host:"+nioc.getFullAddress()+" incoming:"+nioc.isIncoming());
+				}
+				
+				//Are we still connected..
+				if(nioc.isOutgoing() && checkConnected(nioc.getFullAddress(), true) == null) {
+					if(reconnect == false) {
+						MinimaLogger.log("FORCE Slave reconnect "+nioc.getUID()+" "+nioc.getFullAddress());
+						reconnect = true;
+					}
+				}
 			}
 			
 			//Lost a connection
@@ -501,6 +602,11 @@ public class NIOManager extends MessageProcessor {
 			NIOMessage niomsg = new NIOMessage(uid, data);
 			niomsg.setTrace(isTrace(), getTraceFilter());
 			
+			//Is there a full address..
+			if(zMessage.exists("fullhost")) {
+				niomsg.setFullAddress(zMessage.getString("fullhost"));
+			}
+			
 			//Process it.. in a thread pool..
 			THREAD_POOL.execute(niomsg);
 		
@@ -533,6 +639,19 @@ public class NIOManager extends MessageProcessor {
 				return;
 			}
 			
+//			//Are we limiting this..
+//			if(GeneralParams.ARCHIVESYNC_LIMIT_BANDWIDTH) {
+//				
+//				//How much have we used..
+//				long total 		= Main.getInstance().getNIOManager().getTrafficListener().getTotalRead();
+//				String current 	= MiniFormat.formatSize(total);
+//				
+//				if(total > NIOManager.MAX_ARCHIVE_WRITE) {
+//					MinimaLogger.log("MAX Bandwith used already ("+current+") - not asking for archive sync for 24hours..");
+//					return;
+//				}
+//			}
+			
 			//Which client..
 			String clientid = zMessage.getString("client");
 
@@ -543,22 +662,37 @@ public class NIOManager extends MessageProcessor {
 			TxBlock lastblock 	= arch.loadLastBlock();
 			TxPoW lastpow 		= null;
 			if(lastblock == null) {
+				//MinimaLogger.log("NIO_SYNCTXBLOCK : No data in archive setting root of tree :"+arch.getSize());
 				lastpow = MinimaDB.getDB().getTxPoWTree().getRoot().getTxPoW();
 			}else {
 				lastpow = lastblock.getTxPoW();
 			}
 			
-			//Check is within acceptable time..
-			long timenow = System.currentTimeMillis();
-			long maxtime = timenow - SYNC_MAX_TIME;
-			if(lastpow.getTimeMilli().getAsLong() < maxtime) {
-				//we have enough..
-				MinimaLogger.log("We have enough archive blocks.. lastblock "+new Date(lastpow.getTimeMilli().getAsLong()));
+			//Do we have them all
+			if(lastpow.getBlockNumber().isEqual(MiniNumber.ONE)) {
+				//we have them all
 				return;
 			}
 			
+			//Check is within acceptable time..
+			if(!GeneralParams.ARCHIVE) {
+				long timenow = System.currentTimeMillis();
+				long maxtime = timenow - SYNC_MAX_TIME;
+				if(lastpow.getTimeMilli().getAsLong() < maxtime) {
+					//we have enough..
+					if(GeneralParams.IBDSYNC_LOGS) {
+						MinimaLogger.log("We have enough archive blocks.. lastblock "+new Date(lastpow.getTimeMilli().getAsLong()));
+					}
+					return;
+				}
+			}
+			
 			//Send a message asking for a sync
-			sendNetworkMessage(clientid, NIOMessage.MSG_TXBLOCK_REQ, lastpow);
+			if(GeneralParams.IBDSYNC_LOGS) {
+				MinimaLogger.log("[+] Request Sync IBD @ "+lastpow.getBlockNumber());
+			}
+			
+			sendNetworkMessage(clientid, NIOMessage.MSG_IBD_REQ, lastpow);
 			
 		}else if(zMessage.getMessageType().equals(NIO_CHECKLASTMSG)) {
 			
@@ -573,7 +707,7 @@ public class NIOManager extends MessageProcessor {
 				if(diff > MAX_LASTREAD_CHECKER) {
 					
 					//Too long a delay..
-					MinimaLogger.log("INFO : No recent message (5 mins) from "
+					MinimaLogger.log("INFO : No recent message (10 mins) from "
 							+conn.getUID()+" disconnect/reconnect incoming:"
 							+conn.isIncoming()+" valid:"+conn.isValidGreeting()+" host:"+conn.getFullAddress());
 					
@@ -639,7 +773,7 @@ public class NIOManager extends MessageProcessor {
 					
 				}catch(Exception exc) {
 					//Try again in a minute..
-//					MinimaLogger.log(zNIOClient.getUID()+" INFO : connecting attempt "+zNIOClient.getConnectAttempts()+" to "+zNIOClient.getHost()+":"+zNIOClient.getPort()+" "+exc.toString());
+					MinimaLogger.log(zNIOClient.getUID()+" INFO : connecting attempt "+zNIOClient.getConnectAttempts()+" to "+zNIOClient.getHost()+":"+zNIOClient.getPort()+" "+exc.toString());
 					
 					//Do we try to reconnect
 					Message reconn = new Message(NIO_RECONNECT);
@@ -657,6 +791,42 @@ public class NIOManager extends MessageProcessor {
 	 * Disconnect a client
 	 */
 	public void disconnect(String zClientUID) {
+		disconnect(zClientUID, false);
+	}
+	
+	public void disconnect(String zClientUID, boolean zRemoveP2P) {
+		
+		//Logs
+		if(GeneralParams.TXBLOCK_NODE) {
+			try {
+				if(true) {
+					throw new Exception("Show Disconnect Stack Trace");
+				}
+			}catch(Exception exc) {
+				MinimaLogger.log(exc);
+			}
+		}
+		
+		//Do we remove from p2p as well..
+		if(zRemoveP2P && GeneralParams.P2P_ENABLED) {
+			
+			NIOClient nioc =  getNIOClientFromUID(zClientUID);
+			if(nioc!=null) {
+				
+				MinimaLogger.log("Disconnecting and Removing PEER from P2P "+nioc.getFullAddress());
+				
+				//Make it invalid.
+				P2PFunctions.addInvalidPeer(nioc.getFullAddress());
+				
+				//Create an address
+				InetSocketAddress addr = new InetSocketAddress(nioc.getHost(), nioc.getPort());
+				
+				//Post it..
+				Message msg = new Message(P2PManager.P2P_REMOVE_PEER).addObject("address", addr);
+                Main.getInstance().getNetworkManager().getP2PManager().PostMessage(msg);
+			}
+		}
+		
 		Message msg = new Message(NIOManager.NIO_DISCONNECT).addString("uid", zClientUID);
 		PostMessage(msg);
 	}
@@ -677,6 +847,11 @@ public class NIOManager extends MessageProcessor {
 		//Create the network message
 		MiniData niodata = createNIOMessage(zType, zObject);
 		
+		//Are we logging..
+		if(GeneralParams.NETWORKING_LOGS) {
+			MinimaLogger.log("[NETLOGS SEND] to:"+zUID+" type:"+NIOMessage.convertMessageType(zType)+" size:"+MiniFormat.formatSize(niodata.getLength()));
+		}
+		
 		//For ALL or for ONE
 		if(!zUID.equals("")) {
 			//Send it..
@@ -689,30 +864,63 @@ public class NIOManager extends MessageProcessor {
 	
 	public static MiniData createNIOMessage(MiniByte zType, Streamable zObject) throws IOException {
 		
-		//Create a stream to write to
-		ByteArrayOutputStream baos 	= new ByteArrayOutputStream();
-		DataOutputStream dos 		= new DataOutputStream(baos);
+		try {
+			//Create a stream to write to
+			ByteArrayOutputStream baos 	= new ByteArrayOutputStream();
+			DataOutputStream dos 		= new DataOutputStream(baos);
+			
+			//write the type
+			zType.writeDataStream(dos);
+			
+			//Write the Object
+			zObject.writeDataStream(dos);
+			
+			//Flush it..
+			dos.flush();
+			
+			//Convert to byte array
+			byte[] bb = baos.toByteArray();
+			
+			//Close all..
+			dos.close();
+			baos.close();
+			
+			//request it..
+			MiniData data = new MiniData(bb);
+			
+			return data;
+			
+		}catch(OutOfMemoryError oom ) {
+			oom.printStackTrace();
+			MinimaLogger.log("OUT OF MEMORY.. on create NIOMsssage:"+NIOMessage.convertMessageType(zType));
+		}
 		
-		//write the type
-		zType.writeDataStream(dos);
+		throw new IOException("Out Of Memory..");
 		
-		//Write the Object
-		zObject.writeDataStream(dos);
-		
-		//Flush it..
-		dos.flush();
-		
-		//Convert to byte array
-		byte[] bb = baos.toByteArray();
-		
-		//Close all..
-		dos.close();
-		baos.close();
-		
-		//request it..
-		MiniData data = new MiniData(bb);
-		
-		return data;
+//		//Create a stream to write to
+//		ByteArrayOutputStream baos 	= new ByteArrayOutputStream();
+//		DataOutputStream dos 		= new DataOutputStream(baos);
+//		
+//		//write the type
+//		zType.writeDataStream(dos);
+//		
+//		//Write the Object
+//		zObject.writeDataStream(dos);
+//		
+//		//Flush it..
+//		dos.flush();
+//		
+//		//Convert to byte array
+//		byte[] bb = baos.toByteArray();
+//		
+//		//Close all..
+//		dos.close();
+//		baos.close();
+//		
+//		//request it..
+//		MiniData data = new MiniData(bb);
+//		
+//		return data;
 	}
 	
 	/**
@@ -747,13 +955,13 @@ public class NIOManager extends MessageProcessor {
 			dos.flush();
 			
 			//Tell the NIO
-			Main.getInstance().getNIOManager().getTrafficListener().addWriteBytes(msg.getLength());
+			Main.getInstance().getNIOManager().getTrafficListener().addWriteBytes("sendPingMessage",msg.getLength());
 			
 			//Load the message
 			MiniData resp = MiniData.ReadFromStream(dis);
 			
 			//Tell the NIO
-			Main.getInstance().getNIOManager().getTrafficListener().addReadBytes(resp.getLength());
+			Main.getInstance().getNIOManager().getTrafficListener().addReadBytes("sendPingMessage",resp.getLength());
 			
 			//Close the streams..
 			dis.close();

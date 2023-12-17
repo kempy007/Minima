@@ -87,6 +87,27 @@ public class Contract {
 	public int MAX_INSTRUCTIONS = 1024;
 	
 	/**
+	 * The STACK depth - how deep can you go
+	 */
+	public static final int MAX_STACK_DEPTH = 64;
+	int mStackDepth = 0;
+	
+	/**
+	 * MAX Function params
+	 */
+	public static final int MAX_FUNCTION_PARAMS = 32;
+	
+	/**
+	 * MAX size of String or HEX value - 64k
+	 */
+	public static final int MAX_DATA_SIZE = 64 * 1024;
+	
+	/**
+	 * MAX Shift for HEX
+	 */
+	public static final MiniNumber MAX_BITSHIFT = MiniNumber.TWOFIVESIX;
+	
+	/**
 	 * A complete log of the contract execution
 	 */
 	String mCompleteLog="";
@@ -177,7 +198,8 @@ public class Contract {
 			}
 		
 			//Convert this list of Tokens into a list of Statements
-			mBlock = StatementParser.parseTokens(tokens);
+			resetStackDepth();
+			mBlock = StatementParser.parseTokens(tokens, 0);
 			
 			traceLog("Script token parse OK.");
 			mParseOK = true;
@@ -273,7 +295,7 @@ public class Contract {
 	
 	public void traceLog(String zLog) {
 		if(isTrace()) {
-			MinimaLogger.log("INST["+mNumInstructions+"] - "+zLog);
+			MinimaLogger.log("INST["+mNumInstructions+"] STACK["+getStackDepth()+"] - "+zLog);
 		}
 		
 		//Store the complete Log
@@ -303,11 +325,33 @@ public class Contract {
 		MAX_INSTRUCTIONS = zMax;
 	}
 	
+	public void resetStackDepth() {
+		mStackDepth = 0;
+	}
+	
+	public int getStackDepth() {
+		return mStackDepth;
+	}
+	
+	public void incrementStackDepth() throws ExecutionException  {
+		mStackDepth++;
+		if(mStackDepth>MAX_STACK_DEPTH) {
+			throw new ExecutionException("Stack depth too deep! (MAX "+MAX_STACK_DEPTH+") "+mStackDepth);
+		}
+	}
+	
+	public void decrementStackDepth() {
+		mStackDepth--;
+	}
+	
 	public void run() {
 		if(!mParseOK) {
 			traceLog("Script parse FAILED. Please fix and retry.");
 			return;
 		}
+		
+		//Reset the Stack Depth
+		resetStackDepth();
 		
 		//Run the code block
 		try {
@@ -553,6 +597,9 @@ public class Contract {
 		//Remove all the excess white space
 		String script = zScript.replaceAll("\\s+"," ").trim();
 		
+		//Remove all \
+//		script = script.replaceAll("\\\\","").trim();
+		
 		//First CONVERT..
 		ScriptTokenizer tokz = new ScriptTokenizer(script, true);
 		try {
@@ -560,7 +607,6 @@ public class Contract {
 			ArrayList<ScriptToken> tokens = tokz.tokenize();
 		
 			//Now add them correctly..
-			boolean first 		= true;
 			boolean whites 		= true;
 			ScriptToken prevtok = null;
 			for(ScriptToken tok : tokens) {
@@ -571,9 +617,10 @@ public class Contract {
 				
 				if(tok.getTokenType() == ScriptToken.TOKEN_COMMAND) {
 					String command = tok.getToken();
-					if(first) {
+
+					//Always a space before and after a COMMAND
+					if(ret.toString().endsWith(" ")) {
 						ret.append(command+" ");
-						first = false;
 					}else {
 						ret.append(" "+command+" ");
 					}
@@ -588,10 +635,14 @@ public class Contract {
 				}else if(tok.getToken().startsWith("0x")) {
 					String hex = "0x"+tok.getToken().substring(2).toUpperCase();
 					
-					if(whites) {
-						ret.append(hex);
-					}else {
+					if(prevtok!=null && prevtok.getToken().endsWith(")")) {
 						ret.append(" "+hex);
+					}else {
+						if(whites) {
+							ret.append(hex);
+						}else {
+							ret.append(" "+hex);
+						}
 					}
 					
 					whites = false;
@@ -662,26 +713,44 @@ public class Contract {
 	
 	public static void main(String[] zArgs) {
 		
-//		String scr = new String("VERIFYOUT(@INPUT @AMOUNT PREVSTATE(2) @TOKENID FALSE)");
-//		String scr = new String("PREVSTATE(2) @GLOB FALSE");
-//		String scr = new String("@GLOB FALSE");
-//		String scr = new String("let g  = (1 * 3 + (45)+2)");
-
-//		String scr = new String("LET safehouse = [ LET pkcold = coldkey LET pkhot = HOT_KEY\r\n"
-//				+ "                  IF SIGNEDBY ( pkcold ) THEN RETURN TRUE ENDIF\r\n"
-//				+ "                  IF SIGNEDBY ( pkhot ) THEN IF @BLKDIFF GT 20 THEN\r\n"
-//				+ "                  RETURN VERIFYOUT ( @INPUT PREVSTATE ( 21 ) @AMOUNT @TOKENID TRUE ) ENDIF ENDIF ]");
-//		String scr = new String("[as]+(sd)buyer (amount/price) buyer (amount/price)buyer");
-		String scr = new String("let a  = ((sd+1*(12) (23)))buyer ");
-//		String scr = new String("INC((asas) (2323))");
-//		String scr = new String("ASSERT ( [hello][dd](ff) [sdsd](f) *[jjj]) LET f=   (  0  ) ");
-
-		MinimaLogger.log(scr);
 		
-		String clean = Contract.cleanScript(scr,true);
+//		String scr =  "LET a = [ LET returnvalue = $1 + $2 ] "
+//					+ "LET b = 2 "
+//					+ "LET c = 3 "
+//					+ "LET z = FUNCTION(a b c) "
+//					+ "return true";
 		
+//		String scr = "LET n=STATE(0) LET m=STATE(1) LET script=[RETURN MULTISIG(]+STRING(n) LET counter=0 WHILE counter LT m DO LET script=script+[ ]+STRING(PREVSTATE(counter+2)) LET counter=INC(counter) ENDWHILE LET script=script+[)] EXEC script";
+//		String scr = "WHILE  counter LT m DO  LET  script=script+[ ]+STRING(PREVSTATE(counter+2)) LET counter=INC(counter) ENDWHILE LET script=script+[)] EXEC script";
+//		String scr = "IF x LT 6 THEN LET y=5 ENDIF LET f=0";
+		//String scr = "LET func=[ LET g = $1 + $2 ] LET hh=REPLACEFIRST(func [$1] [$2] ) LET y=FUNCTION(func 1 2)";
+		
+		String scr = "LET g = 0xFF << -8";
+		//String scr = "LET g = SETLEN(12 0x1122334400)";
+//		String scr = "~0xFF ~(0x00)";
+		
+//		String scr = "LET a = [$1$1$1$1$1$1$1$1$1$1] // the script\r\n"
+//				+ "LET b = [$2$2$2$2$2$2$2$2$2$2] // first script parameter\r\n"
+//				+ "LET c = [$3$3$3$3$3$3$3$3$3$3]\r\n"
+//				+ "LET d = [$4$4$4$4$4$4$4$4$4$4]\r\n"
+//				+ "LET e = [$5$5$5$5$5$5$5$5$5$5]\r\n"
+//				+ "LET f = [$6$6$6$6$6$6$6$6$6$6]\r\n"
+//				+ "LET g = [$7$7$7$7$7$7$7$7$7$7]\r\n"
+//				+ "LET h = [$8$8$8$8$8$8$8$8$8$8] // last script parameter\r\n"
+//				+ "LET z = FUNCTION(a b c d e f g h)";
+		
+		//String scr = "LET a=0xFF WHILE TRUE DO LET a = a<<1000 ENDWHILE";
+		
+//		String scr = "LET a = 0xff<<10000";
+
 		MinimaLogger.log("");
-		MinimaLogger.log(clean);
+		MinimaLogger.log("Script:"+scr);
 		
+		String clean = cleanScript(scr,false);
+		MinimaLogger.log("Clean :"+clean);
+		
+		//Run it..
+		Contract ctr = new Contract(clean, new ArrayList<>(), new Witness(), new Transaction(), new ArrayList<>(),true);
+		ctr.run();
 	}
 }
